@@ -49,12 +49,20 @@ class GroqClient:
 
     def _call(self, prompt: str) -> str:
         self._limiter.acquire()
-        response = self._client.chat.completions.create(
-            model=self._model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.1,
-            max_tokens=512,
-        )
+        try:
+            response = self._client.chat.completions.create(
+                model=self._model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=512,
+            )
+        except Exception as exc:
+            # Groq raises RateLimitError for both RPM and TPD (token quota) 429s.
+            # Re-raise as BudgetExceeded so the scorer stops cleanly.
+            exc_type = type(exc).__name__
+            if "RateLimitError" in exc_type or getattr(exc, "status_code", None) == 429:
+                raise BudgetExceeded(str(exc)) from exc
+            raise
         return response.choices[0].message.content
 
     def score_job(self, job: dict, cv_summary: str) -> ScoreResult:
