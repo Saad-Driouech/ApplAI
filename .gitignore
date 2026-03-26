@@ -1,0 +1,44 @@
+# ── Secrets (CRITICAL) ──
+.env
+*.env*
+!*.env.example
+config/.env
+**/secrets/
+
+# ── Runtime data ──
+data/db/*.db
+data/db/*.db-journal
+data/db/*.db-wal
+data/n8n/
+data/logs/
+
+# ── Python ──
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# ── Node ──
+node_modules/
+
+# ── OS ──
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# ── IDE ──
+.vscode/
+.idea/
+
+# ── Logs ──
+*.log
+
+# ── Temp ──
+*.tmp
+*.bak
+
+SECURITY.md
+

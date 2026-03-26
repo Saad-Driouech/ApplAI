@@ -1,0 +1,90 @@
+services:
+
+  # ── Python pipeline API ──────────────────────────────────────────────────
+  applai-api:
+    build: .
+    container_name: applai-api
+    restart: unless-stopped
+    expose:
+      - "8000"                          # internal only — n8n calls this
+    env_file:
+      - config/.env
+    environment:
+      - APPLAI_DB_PATH=/data/db/applai.db
+      - APPLAI_WORKING_DIR=/mnt/job_applications
+      - APPLAI_CV_TEMPLATE=/mnt/job_applications/resumes/tex/Saad_Driouech_2pages_CV.tex
+    volumes:
+      - ./src:/app/src:ro
+      - ./data/db:/data/db
+      - ${APPLAI_WORKING_DIR}:/mnt/job_applications
+      - /Users/saaddriouech/.local/bin/claude:/usr/local/bin/claude:ro
+      - ~/.claude:/home/node/.claude:ro
+    networks:
+      - applai-net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ── n8n workflow orchestrator ────────────────────────────────────────────
+  n8n:
+    image: n8nio/n8n:1.91.3
+    container_name: applai-n8n
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5678:5678"           # localhost only
+
+    user: "1000:1000"
+
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+
+    security_opt:
+      - no-new-privileges:true
+
+    depends_on:
+      - applai-api
+
+    environment:
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=${N8N_USER}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_PASSWORD}
+      # Security hardening
+      - N8N_DIAGNOSTICS_ENABLED=false
+      - N8N_TEMPLATES_ENABLED=false
+      - N8N_COMMUNITY_PACKAGES_ENABLED=false
+      - N8N_HIRING_BANNER_ENABLED=false
+      - N8N_VERSION_NOTIFICATIONS_ENABLED=false
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=true
+      - EXECUTIONS_DATA_SAVE_ON_SUCCESS=none
+      - EXECUTIONS_DATA_PRUNE_MODE=soft
+      - EXECUTIONS_DATA_MAX_AGE=168
+      - N8N_LOG_LEVEL=warn
+      - N8N_RUNNERS_ENABLED=true
+      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
+      # Timezone
+      - GENERIC_TIMEZONE=Europe/Berlin
+      - TZ=Europe/Berlin
+
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ${APPLAI_WORKING_DIR}:/mnt/job_applications
+
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2.0"
+
+    networks:
+      - applai-net
+
+volumes:
+  n8n_data:
+
+networks:
+  applai-net:
+    driver: bridge
