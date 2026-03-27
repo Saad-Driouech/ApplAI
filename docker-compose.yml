@@ -17,8 +17,6 @@ services:
       - ./src:/app/src:ro
       - ./data/db:/data/db
       - ${APPLAI_WORKING_DIR}:/mnt/job_applications
-      - /Users/saaddriouech/.local/bin/claude:/usr/local/bin/claude:ro
-      - ~/.claude:/home/node/.claude:ro
     networks:
       - applai-net
     healthcheck:

@@ -12,6 +12,7 @@ playwright==1.44.*             # headless browser for JS-heavy boards (optional)
 # ── LLM Clients ───────────────────────────────────────────────────────────
 google-genai>=1.0.0,<2.0.0         # Gemini API (Tier 1 scoring) — new official SDK
 groq>=0.9.0,<1.0.0                 # Groq API (Tier 1 scoring — alternative to Gemini)
+anthropic>=0.40.0,<1.0.0           # Anthropic API (Tier 2 — CV + cover letter generation)
 
 # ── Document Generation ───────────────────────────────────────────────────
 python-docx==1.1.*             # Cover letter .docx generation

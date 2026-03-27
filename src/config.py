@@ -52,9 +52,9 @@ class NotionConfig:
 
 
 @dataclass(frozen=True)
-class ClaudeConfig:
-    binary: str = "claude"            # resolved at runtime from $PATH
-    timeout_seconds: int = 120
+class AnthropicConfig:
+    api_key: str
+    model: str = "claude-sonnet-4-6"
 
 
 @dataclass(frozen=True)
@@ -86,7 +86,7 @@ class AppConfig:
     groq: GroqConfig
     discord: DiscordConfig
     notion: NotionConfig
-    claude: ClaudeConfig
+    anthropic: AnthropicConfig
     ollama: OllamaConfig
     paths: PathConfig
     tier1_provider: str        # "gemini" | "groq" | "ollama"
@@ -127,9 +127,9 @@ def load() -> AppConfig:
         feedback_log_db_id=_optional("NOTION_FEEDBACK_LOG_DB_ID", ""),
     )
 
-    claude = ClaudeConfig(
-        binary=_optional("CLAUDE_BINARY", "claude"),
-        timeout_seconds=int(_optional("CLAUDE_TIMEOUT", "120")),
+    anthropic = AnthropicConfig(
+        api_key=_require("ANTHROPIC_API_KEY"),
+        model=_optional("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
     )
 
     ollama_enabled = _optional("OLLAMA_ENABLED", "false").lower() == "true"
@@ -172,7 +172,7 @@ def load() -> AppConfig:
         groq=groq,
         discord=discord,
         notion=notion,
-        claude=claude,
+        anthropic=anthropic,
         ollama=ollama,
         paths=paths,
         tier1_provider=tier1_provider,
