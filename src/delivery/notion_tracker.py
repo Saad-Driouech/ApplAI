@@ -3,7 +3,7 @@ Notion integration for job application tracking.
 
 Creates and updates pages in the user's Notion job tracker database.
 Each job application maps to one Notion page with properties for
-status, score, company, role, country, links, and decisions.
+status, score, company, role, country, city, links, and decisions.
 """
 from __future__ import annotations
 
@@ -15,27 +15,39 @@ log = get_logger(__name__)
 
 # Notion property names — update these if your database uses different column names
 _PROPS = {
-    "title": "Position",           # Title property (required)
-    "company": "Company",
+    "company": "Company",           # Title column in Notion (the main row name)
+    "title": "Position",            # Job title — Text column
     "country": "Country",
+    "city": "City",
     "score": "Score",
-    "status": "Status",
+    "status": "Status",             # Application lifecycle: Ready for Review → Queued → Applied → …
     "source_url": "Links",
     "cv_path": "CV Path",
     "cover_letter_path": "Cover Letter Path",
-    "decision": "Decision",
     "notes": "Notes",
 }
 
-_STATUS_OPTIONS = {
-    "queued": "Queued",
-    "generating": "Generating",
-    "ready": "Ready for Review",
-    "approved": "Approved",
-    "submitted": "Submitted",
-    "rejected": "Rejected",
-    "skipped": "Skipped",
+# Maps ISO country codes to full names for display in Notion
+_COUNTRY_NAMES = {
+    "DE": "Germany",
+    "AE": "UAE",
+    "SA": "Saudi Arabia",
+    "CH": "Switzerland",
+    "QA": "Qatar",
+    "NL": "Netherlands",
 }
+
+
+def _format_country(code: str) -> str:
+    return _COUNTRY_NAMES.get(code.upper(), code)
+
+
+def _format_city(city: str) -> str:
+    if not city:
+        return ""
+    if "remote" in city.lower():
+        return "Remote"
+    return city.strip()
 
 
 class NotionTracker:
@@ -43,7 +55,7 @@ class NotionTracker:
     Creates and updates job application records in Notion.
 
     Args:
-        api_token: Notion integration API token.
+        api_token:   Notion integration API token.
         database_id: ID of the job tracker database in Notion.
     """
 
@@ -64,6 +76,7 @@ class NotionTracker:
     def log_job(self, job: dict, application: dict) -> str:
         """
         Create a new page in Notion for this job application.
+        Status is set to 'Ready for Review' — updated after Discord decision.
 
         Returns the Notion page ID.
         """
@@ -84,52 +97,38 @@ class NotionTracker:
         log.info("Notion page created: %s for job %s", page_id, job.get("title"))
         return page_id
 
-    def update_status(
-        self,
-        page_id: str,
-        status: str,
-        notes: Optional[str] = None,
-    ) -> None:
-        """Update the status (and optionally notes) on an existing Notion page."""
-        notion_status = _STATUS_OPTIONS.get(status, status.capitalize())
-        props: dict[str, Any] = {
-            _PROPS["status"]: {
-                "select": {"name": notion_status}
+    def record_decision(self, page_id: str, decision: str) -> None:
+        """
+        Update Status after the user clicks Approve or Reject in Discord.
+
+        approved → Status = "Queued"    (will apply)
+        rejected → Status = "Discarded" (won't apply)
+        """
+        status = "Queued" if decision == "approved" else "Discarded"
+
+        self._client.pages.update(
+            page_id=page_id,
+            properties={
+                _PROPS["status"]: {"select": {"name": status}},
             },
+        )
+        audit("notion_decision_recorded", page_id=page_id, decision=decision, status=status)
+        log.info("Notion page %s updated: status=%s", page_id, status)
+
+    def update_status(self, page_id: str, status: str, notes: Optional[str] = None) -> None:
+        """Manually update the Status field (e.g. Applied, Interview, Rejected)."""
+        props: dict[str, Any] = {
+            _PROPS["status"]: {"select": {"name": status}},
         }
         if notes:
             props[_PROPS["notes"]] = {
                 "rich_text": [{"text": {"content": notes[:2000]}}]
             }
-
         self._client.pages.update(page_id=page_id, properties=props)
-        log.debug("Notion page %s updated: status=%s", page_id, notion_status)
-
-    def record_decision(
-        self,
-        page_id: str,
-        decision: str,          # "approved" | "rejected"
-    ) -> None:
-        """Record the user's Discord approval/rejection decision."""
-        notion_decision = "Approved ✅" if decision == "approved" else "Rejected ❌"
-        status = "Approved" if decision == "approved" else "Rejected"
-
-        self._client.pages.update(
-            page_id=page_id,
-            properties={
-                _PROPS["decision"]: {
-                    "select": {"name": notion_decision}
-                },
-                _PROPS["status"]: {
-                    "select": {"name": status}
-                },
-            },
-        )
-        audit("notion_decision_recorded", page_id=page_id, decision=decision)
+        log.debug("Notion page %s updated: status=%s", page_id, status)
 
     def _build_properties(self, job: dict, application: dict) -> dict[str, Any]:
         props: dict[str, Any] = {
-            # Company is the Title column (required)
             _PROPS["company"]: {
                 "title": [{"text": {"content": job.get("company", "Unknown")}}]
             },
@@ -137,12 +136,18 @@ class NotionTracker:
                 "rich_text": [{"text": {"content": job.get("title", "")}}]
             },
             _PROPS["country"]: {
-                "rich_text": [{"text": {"content": job.get("country", "")}}]
+                "rich_text": [{"text": {"content": _format_country(job.get("country", ""))}}]
             },
             _PROPS["status"]: {
                 "select": {"name": "Ready for Review"}
             },
         }
+
+        city = _format_city(job.get("city", "") or "")
+        if city:
+            props[_PROPS["city"]] = {
+                "rich_text": [{"text": {"content": city}}]
+            }
 
         score = job.get("score")
         if score is not None:

@@ -224,7 +224,7 @@ def phase_deliver(cfg) -> int:
     with db.get_conn(cfg.paths.db_path) as conn:
         # Find applications whose job status is 'ready'
         rows = conn.execute("""
-            SELECT a.*, j.title, j.company, j.country, j.score, j.score_reasoning,
+            SELECT a.*, j.title, j.company, j.country, j.city, j.score, j.score_reasoning,
                    j.source_url, j.id as job_id
             FROM applications a
             JOIN jobs j ON a.job_id = j.id
@@ -239,6 +239,7 @@ def phase_deliver(cfg) -> int:
             "title": app["title"],
             "company": app["company"],
             "country": app["country"],
+            "city": app.get("city", ""),
             "score": app["score"],
             "source_url": app["source_url"],
         }
