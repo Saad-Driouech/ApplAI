@@ -42,6 +42,7 @@ class GeminiConfig:
 class DiscordConfig:
     bot_token: str
     channel_id: str
+    public_key: str = ""   # from Discord Developer Portal → General Information
 
 
 @dataclass(frozen=True)
@@ -119,6 +120,7 @@ def load() -> AppConfig:
     discord = DiscordConfig(
         bot_token=_require("DISCORD_BOT_TOKEN"),
         channel_id=_require("DISCORD_CHANNEL_ID"),
+        public_key=_optional("DISCORD_PUBLIC_KEY", ""),
     )
 
     notion = NotionConfig(

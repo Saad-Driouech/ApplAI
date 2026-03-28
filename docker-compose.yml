@@ -6,7 +6,9 @@ services:
     container_name: applai-api
     restart: unless-stopped
     expose:
-      - "8000"                          # internal only — n8n calls this
+      - "8000"                          # internal — n8n calls this
+    ports:
+      - "127.0.0.1:8000:8000"           # localhost only — for cloudflared tunnel
     env_file:
       - config/.env
     environment:
