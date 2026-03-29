@@ -136,8 +136,9 @@ def phase_generate(cfg) -> int:
     from src.documents.cv_generator import CVGenerator
     from src.documents.cover_letter import CoverLetterGenerator
 
-    # CV template location — must be set via APPLAI_CV_TEMPLATE env var or default
     import os
+
+    # CV template
     cv_template_path = Path(os.environ.get("APPLAI_CV_TEMPLATE", ""))
     if not cv_template_path.exists():
         log.error(
@@ -145,14 +146,14 @@ def phase_generate(cfg) -> int:
         )
         return 0
 
-    cv_gen = CVGenerator(
-        template_path=cv_template_path,
-        output_dir=cfg.paths.working_dir / "applications",
-        profile_path=cfg.paths.working_dir / "profile_summary.md",
-    )
+    # Cover letter template
+    cl_template_path = Path(os.environ.get("APPLAI_CL_TEMPLATE", ""))
+    if not cl_template_path.exists():
+        log.error(
+            "Cover letter template not found. Set APPLAI_CL_TEMPLATE env var to the path of your .tex file."
+        )
+        return 0
 
-    candidate_name = os.environ.get("CANDIDATE_NAME", "Candidate Name")
-    candidate_email = os.environ.get("CANDIDATE_EMAIL", "candidate@email.com")
     profile_path = cfg.paths.working_dir / "profile_summary.md"
     if not profile_path.exists():
         log.warning(
@@ -161,7 +162,17 @@ def phase_generate(cfg) -> int:
         )
         profile_path = None
 
+    candidate_name = os.environ.get("CANDIDATE_NAME", "Candidate Name")
+    candidate_email = os.environ.get("CANDIDATE_EMAIL", "candidate@email.com")
+
+    cv_gen = CVGenerator(
+        template_path=cv_template_path,
+        output_dir=cfg.paths.working_dir / "applications",
+        profile_path=profile_path,
+    )
+
     cl_gen = CoverLetterGenerator(
+        template_path=cl_template_path,
         output_dir=cfg.paths.working_dir / "applications",
         profile_path=profile_path,
         candidate_name=candidate_name,
