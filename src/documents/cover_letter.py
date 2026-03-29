@@ -1,18 +1,25 @@
 """
-Cover letter generator.
+Cover letter generator: calls the Anthropic API to produce tailored body text,
+fills in the LaTeX template with known fields, and compiles to PDF via pdflatex.
 
-Calls the Anthropic API to produce a tailored cover letter,
-then writes it as a .docx file using python-docx.
+Pipeline per job:
+  1. Read base .tex template and profile_summary.md from disk (dynamic — always latest)
+  2. Call Anthropic API: system = rules + profile, user = job details
+  3. Fill template placeholders programmatically (sender, recipient, date, body)
+  4. Validate output via latex_safety.validate_tex_file()
+  5. Compile with pdflatex (--no-shell-escape)
+  6. Return path to the generated PDF
 
-The candidate profile is read from profile_summary.md on every call
-so updates to the file are picked up automatically.
-
-Output: {job_folder}/cover_letter.docx
+Output: {job_folder}/cover_letter.pdf
 """
 from __future__ import annotations
 
+import os
 import re
+import shutil
+import subprocess
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -29,17 +36,23 @@ Never fabricate qualifications or experiences not present in the profile.
 {profile}
 
 ## Cover Letter Rules
-- Maximum 400 words.
-- Three paragraphs: hook/connection to the company, evidence of fit, call-to-action.
+- Write exactly 4 paragraphs plus a brief closing line.
+- Paragraph 1: Opening hook — why this company/role excites you.
+- Paragraph 2: Academic and technical background with specific metrics.
+- Paragraph 3: Professional experience and relevant achievements.
+- Paragraph 4: Company fit and what you bring to the team.
+- Closing: One sentence thanking them and expressing interest in discussing further.
+- Total length: 250-400 words.
 - Tone: professional, confident, concise.
 - Use specific metrics and achievements from the profile where relevant.
-- Tailor to the company's specific mission and focus area.
-- Do NOT include a salutation line (added separately by the formatter).
-- Return ONLY the letter body text — no markdown, no subject line, no sign-off.
+- The output will be inserted into a LaTeX document.
+- Escape LaTeX special characters: use \\% for %, \\& for &, \\# for #, \\$ for $, \\_ for _.
+- Do NOT include any salutation (e.g. "Dear..."), subject line, sign-off, or name.
+- Return ONLY the body paragraphs separated by blank lines — no markdown, no LaTeX commands.
 """
 
 _CL_USER_TEMPLATE = """\
-Write a cover letter for this role:
+Write cover letter body paragraphs for this role:
 
 Title: {title}
 Company: {company}
@@ -52,55 +65,86 @@ Job Description (first 2000 chars):
 """
 
 
+def _escape_latex(text: str) -> str:
+    """Escape characters that are special in LaTeX, preserving already-escaped ones."""
+    # Don't double-escape: only escape chars not preceded by backslash
+    for char in ['&', '%', '$', '#', '_']:
+        text = re.sub(r'(?<!\\)' + re.escape(char), '\\' + char, text)
+    return text
+
+
 class CoverLetterError(Exception):
     pass
 
 
 class CoverLetterGenerator:
     """
-    Generates a tailored .docx cover letter for a specific job.
+    Generates a tailored PDF cover letter for a specific job.
 
     Args:
+        template_path:   Path to the base .tex cover letter template.
         output_dir:      Base directory where job folders are created.
         profile_path:    Path to profile_summary.md — read fresh on every call.
-        candidate_name:  Used in the sign-off of the letter.
-        candidate_email: Included in the document header.
+        candidate_name:  Used in sender info and sign-off.
+        candidate_email: Included in the sender header.
+        pdflatex_bin:    Path to the pdflatex binary.
     """
 
     def __init__(
         self,
+        template_path: Path,
         output_dir: Path,
         profile_path: Optional[Path],
         candidate_name: str,
         candidate_email: str,
+        pdflatex_bin: str = "pdflatex",
     ):
+        self._template = template_path
         self._output_dir = output_dir
         self._profile_path = profile_path
         self._candidate_name = candidate_name
         self._candidate_email = candidate_email
+        self._pdflatex = pdflatex_bin
+
+        if not template_path.exists():
+            raise FileNotFoundError(f"Cover letter template not found: {template_path}")
 
     def generate(self, job: dict, gemini_reasoning: str = "") -> Path:
         """
-        Generate a .docx cover letter for *job*.
+        Generate a tailored PDF cover letter for *job*.
 
-        Returns the path to the .docx file.
+        Returns the path to the compiled .pdf file.
         Raises CoverLetterError on failure.
         """
-        body = self._write_with_api(job, gemini_reasoning)
+        body_text = self._generate_body(job, gemini_reasoning)
+        tex_source = self._fill_template(body_text, job)
+
         job_folder = self._job_folder(job)
         job_folder.mkdir(parents=True, exist_ok=True)
 
-        docx_path = self._save_docx(body, job, job_folder)
-        audit("cover_letter_generated", job_id=job.get("id", "?"), docx_path=str(docx_path))
-        log.info("Cover letter generated: %s", docx_path)
-        return docx_path
+        tex_path = job_folder / "cover_letter.tex"
+        tex_path.write_text(tex_source, encoding="utf-8")
 
-    def _write_with_api(self, job: dict, reasoning: str) -> str:
+        from src.utils.latex_safety import validate_tex_file
+        validation = validate_tex_file(str(tex_path))
+        if not validation["safe"]:
+            violations = validation["violations"]
+            log.error(
+                "Cover letter failed LaTeX safety check for job %s: %s",
+                job.get("id", "?"), violations,
+            )
+            raise CoverLetterError(f"LaTeX safety violations: {violations}")
+
+        pdf_path = self._compile(tex_path, job_folder)
+        audit("cover_letter_generated", job_id=job.get("id", "?"), pdf_path=str(pdf_path))
+        log.info("Cover letter generated: %s", pdf_path)
+        return pdf_path
+
+    def _generate_body(self, job: dict, reasoning: str) -> str:
         from src import claude_bridge
 
         data = claude_bridge.validate_input(dict(job))
 
-        # Read fresh on every call — profile_summary.md changes over time
         profile = (
             self._profile_path.read_text(encoding="utf-8")
             if self._profile_path and self._profile_path.exists()
@@ -128,64 +172,98 @@ class CoverLetterGenerator:
 
         output = result.get("output", "").strip()
         if not output:
-            raise CoverLetterError("API returned empty cover letter")
+            raise CoverLetterError("API returned empty cover letter body")
 
         return output
 
-    def _save_docx(self, body: str, job: dict, job_folder: Path) -> Path:
-        try:
-            from docx import Document
-            from docx.shared import Pt, Inches
-            from docx.enum.text import WD_ALIGN_PARAGRAPH
-        except ImportError as exc:
+    def _fill_template(self, body_text: str, job: dict) -> str:
+        """Fill the LaTeX template with known fields and LLM-generated body."""
+        tex = self._template.read_text(encoding="utf-8")
+
+        company = job.get("company", "Company")
+        title = job.get("title", "Position")
+        country = job.get("country", "")
+        city = job.get("city", "")
+
+        # Sender info
+        tex = tex.replace("SENDER-NAME", _escape_latex(self._candidate_name))
+        tex = tex.replace("SENDER-EMAIL", _escape_latex(self._candidate_email))
+        tex = tex.replace("SENDER-ADDRESS", "")
+        tex = tex.replace("SENDER-PHONE", "")
+        tex = tex.replace("SENDER-CITY", _escape_latex(city) if city else "")
+
+        # Recipient info — we only know the company name
+        tex = tex.replace("RECIPIENT-COMPANY", _escape_latex(company))
+        tex = tex.replace("RECIPIENT-NAME", "")
+        tex = tex.replace("RECIPIENT-STREET", "")
+        tex = tex.replace("RECIPIENT-POSTCODE-CITY", "")
+        tex = tex.replace("RECIPIENT-COUNTRY", _escape_latex(country) if country else "")
+
+        # Date
+        tex = tex.replace("LETTER-DATE", datetime.now(timezone.utc).strftime("%d %B %Y"))
+
+        # Subject
+        tex = tex.replace("SUBJECT-LINE", f"Application as {_escape_latex(title)}")
+
+        # Salutation
+        tex = tex.replace("SALUTATION", "Dear Hiring Team,")
+
+        # Body — split LLM output into paragraphs and fill slots
+        paragraphs = [p.strip() for p in body_text.split("\n\n") if p.strip()]
+
+        # Map paragraphs to placeholder slots
+        placeholders = [
+            "BODY-PARAGRAPH-1",
+            "BODY-PARAGRAPH-2",
+            "BODY-PARAGRAPH-3",
+            "BODY-PARAGRAPH-4",
+            "CLOSING-PARAGRAPH",
+        ]
+        for i, placeholder in enumerate(placeholders):
+            if i < len(paragraphs):
+                tex = tex.replace(placeholder, paragraphs[i])
+            else:
+                tex = tex.replace(placeholder, "")
+
+        # Closing
+        tex = tex.replace("CLOSING-LINE", "Kind regards,")
+
+        # Clean up empty lines from unfilled optional fields
+        tex = re.sub(r'\n\s*\\\\\s*\n', '\n', tex)
+
+        return tex
+
+    def _compile(self, tex_path: Path, output_dir: Path) -> Path:
+        """Run pdflatex twice (for cross-references) and return the PDF path."""
+        if not shutil.which(self._pdflatex):
             raise CoverLetterError(
-                "python-docx is not installed. Run: pip install python-docx"
-            ) from exc
+                f"pdflatex not found at '{self._pdflatex}'. "
+                "Install texlive-latex-base or equivalent."
+            )
 
-        doc = Document()
+        cmd = [
+            self._pdflatex,
+            "--no-shell-escape",
+            "-interaction=nonstopmode",
+            "-output-directory", str(output_dir),
+            str(tex_path),
+        ]
 
-        for section in doc.sections:
-            section.top_margin = Inches(1)
-            section.bottom_margin = Inches(1)
-            section.left_margin = Inches(1.25)
-            section.right_margin = Inches(1.25)
+        for pass_num in (1, 2):
+            log.debug("pdflatex pass %d: %s", pass_num, tex_path.name)
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            if proc.returncode != 0:
+                output_tail = (proc.stdout or proc.stderr or "")[-3000:]
+                log.error("pdflatex output:\n%s", output_tail)
+                raise CoverLetterError(
+                    f"pdflatex failed (pass {pass_num}, exit {proc.returncode})"
+                )
 
-        header = doc.add_paragraph()
-        header.alignment = WD_ALIGN_PARAGRAPH.LEFT
-        run = header.add_run(self._candidate_name)
-        run.bold = True
-        run.font.size = Pt(12)
-        header.add_run(f"\n{self._candidate_email}")
+        pdf_path = output_dir / "cover_letter.pdf"
+        if not pdf_path.exists():
+            raise CoverLetterError("pdflatex succeeded but cover_letter.pdf not found")
 
-        doc.add_paragraph()
-
-        salutation = doc.add_paragraph()
-        salutation.add_run(f"Hiring Manager\n{job.get('company', '')}")
-
-        doc.add_paragraph()
-
-        re_line = doc.add_paragraph()
-        re_run = re_line.add_run(f"Re: {job.get('title', 'Application')}")
-        re_run.bold = True
-
-        doc.add_paragraph()
-
-        for para in body.split("\n\n"):
-            para = para.strip()
-            if para:
-                p = doc.add_paragraph(para)
-                p.paragraph_format.space_after = Pt(8)
-
-        doc.add_paragraph()
-
-        signoff = doc.add_paragraph()
-        signoff.add_run("Sincerely,\n")
-        signoff_name = signoff.add_run(self._candidate_name)
-        signoff_name.bold = True
-
-        docx_path = job_folder / "cover_letter.docx"
-        doc.save(str(docx_path))
-        return docx_path
+        return pdf_path
 
     def _job_folder(self, job: dict) -> Path:
         company = sanitize_company_for_path(job.get("company", "unknown"))
