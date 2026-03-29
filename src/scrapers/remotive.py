@@ -58,9 +58,7 @@ class RemotiveScraper(BaseScraper):
             raise ScraperError(f"Remotive request failed: {exc}") from exc
 
         try:
-            import json
-            text = resp.content.decode(resp.encoding or "utf-8", errors="replace")
-            data = json.loads(text)
+            data = resp.json()
         except Exception as exc:
             raise ScraperError(f"Remotive JSON parse failed: {exc}") from exc
 
