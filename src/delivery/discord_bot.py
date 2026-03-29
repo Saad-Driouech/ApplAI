@@ -1,7 +1,7 @@
 """
 Discord delivery + review gate.
 
-Sends a job application bundle (PDF CV + .docx cover letter) to a Discord
+Sends a job application bundle (PDF CV + PDF cover letter) to a Discord
 channel and waits for the user to click an Approve or Reject button.
 
 Setup (one-time):
@@ -90,11 +90,7 @@ class DiscordDelivery:
 
         files = {
             "files[0]": (cv_path.name, cv_path.read_bytes(), "application/pdf"),
-            "files[1]": (
-                cover_letter_path.name,
-                cover_letter_path.read_bytes(),
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            ),
+            "files[1]": (cover_letter_path.name, cover_letter_path.read_bytes(), "application/pdf"),
         }
 
         # Discord multipart: JSON payload + file attachments
