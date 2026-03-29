@@ -15,6 +15,7 @@ services:
       - APPLAI_DB_PATH=/data/db/applai.db
       - APPLAI_WORKING_DIR=/mnt/job_applications
       - APPLAI_CV_TEMPLATE=${APPLAI_CV_TEMPLATE}
+      - APPLAI_CL_TEMPLATE=${APPLAI_CL_TEMPLATE}
     volumes:
       - ./src:/app/src:ro
       - ./data/db:/data/db
