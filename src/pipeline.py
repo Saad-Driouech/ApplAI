@@ -101,9 +101,8 @@ def phase_score(cfg) -> dict:
             cv_summary_path,
         )
         cv_summary = (
-            "Candidate: Moroccan national, Master's student in AI/Data Science in Germany. "
-            "Skills: Python, ML/DL (PyTorch, TensorFlow), NLP, LLMs. "
-            "Work authorisation: Germany student visa (part-time allowed)."
+            "No profile summary provided. "
+            "Create cv_summary.txt in your working directory for accurate scoring."
         )
 
     if cfg.tier1_provider == "groq":
