@@ -9,7 +9,6 @@ Rate limit: 3 s courtesy delay.
 """
 from __future__ import annotations
 
-import hashlib
 import re
 from typing import Any
 from urllib.parse import quote_plus

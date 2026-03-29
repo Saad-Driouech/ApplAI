@@ -9,7 +9,6 @@ Rate limit: 2 s courtesy delay between requests (set in base).
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from typing import Any
