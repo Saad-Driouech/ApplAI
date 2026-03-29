@@ -14,7 +14,7 @@ services:
     environment:
       - APPLAI_DB_PATH=/data/db/applai.db
       - APPLAI_WORKING_DIR=/mnt/job_applications
-      - APPLAI_CV_TEMPLATE=/mnt/job_applications/resumes/tex/Saad_Driouech_2pages_CV.tex
+      - APPLAI_CV_TEMPLATE=${APPLAI_CV_TEMPLATE}
     volumes:
       - ./src:/app/src:ro
       - ./data/db:/data/db
