@@ -1,0 +1,109 @@
+{
+  "name": "ApplAI – Full Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 12
+            }
+          ]
+        }
+      },
+      "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "name": "Every 12 Hours",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://applai-api:8000/scrape",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+      "name": "Scrape",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://applai-api:8000/score",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "c3d4e5f6-a7b8-9012-cdef-123456789012",
+      "name": "Score",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://applai-api:8000/generate",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "d4e5f6a7-b8c9-0123-def0-234567890123",
+      "name": "Generate",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://applai-api:8000/deliver",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "e5f6a7b8-c9d0-1234-ef01-345678901234",
+      "name": "Deliver",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1120, 300]
+    }
+  ],
+  "connections": {
+    "Every 12 Hours": {
+      "main": [
+        [{"node": "Scrape", "type": "main", "index": 0}]
+      ]
+    },
+    "Scrape": {
+      "main": [
+        [{"node": "Score", "type": "main", "index": 0}]
+      ]
+    },
+    "Score": {
+      "main": [
+        [{"node": "Generate", "type": "main", "index": 0}]
+      ]
+    },
+    "Generate": {
+      "main": [
+        [{"node": "Deliver", "type": "main", "index": 0}]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "meta": {
+    "instanceId": ""
+  }
+}
