@@ -1,91 +1,201 @@
 # ApplAI
 
-Job intelligence and document preparation pipeline for AI/ML/Data Science roles.
+**Automated job application pipeline for AI/ML/Data Science roles.**
 
-Discovers jobs across 20+ sources in 6 countries, scores them with Gemini Flash,
-tailors your CV and cover letter with Claude Code, and delivers a ready-to-apply
-package via Telegram. **You submit manually** — the system never logs into anything
-as you, stores no passwords, and runs no browser automation.
-
-## How it works
-
-```
-Scrape 20+ job boards (every 12h)
-  → Sanitize JDs (strip prompt injection, hidden text)
-  → Score with Gemini 2.5 Flash (free tier)
-  → Notify you via Telegram with top matches
-  → You approve → Claude Code tailors CV (.tex→PDF) + cover letter (.docx)
-  → LaTeX safety check → You review documents in Telegram
-  → Delivery package: apply link + documents + copy-paste fields
-  → You submit (2 min) → Reply /applied → Notion tracks everything
-```
+Scrapes job boards, scores relevance with LLMs, generates tailored CVs and cover letters, and delivers ready-to-apply packages via Discord for human review. You submit manually — the system never logs into anything as you, stores no passwords, and runs no browser automation.
 
 ## Architecture
 
-```
-n8n (orchestrator)
- ├── Job Scrapers → jd_sanitizer.py → SQLite + Notion
- ├── Gemini 2.5 Flash (Tier 1: scoring, research, follow-ups)
- ├── Claude Code (Tier 2: CV tailoring + cover letters only)
- │   └── via claude_bridge.py (sanitized, no shell injection)
- ├── latex_safety.py → pdflatex --no-shell-escape
- ├── Telegram Bot (notifications + permanent document review gate)
- └── Notion (dashboard + tracking)
-```
+<p align="center">
+  <img src="docs/architecture.svg" alt="ApplAI Architecture" width="800"/>
+</p>
 
-## Security model
+## Pipeline Flow
 
-- **No auto-submission**: System prepares everything, you click submit
-- **No stored credentials**: No password vault, no browser automation
-- **JD sanitization**: Three-stage pipeline strips prompt injection before any LLM sees the text
-- **LaTeX safety**: Generated .tex files scanned for dangerous primitives, compiled with --no-shell-escape
-- **Claude isolation**: Invoked via `claude_bridge.py` — never raw shell interpolation
-- **Permanent review gate**: You review every CV and cover letter before it goes anywhere
-- **n8n hardened**: Env var blocking, community packages disabled, capability drops
+<p align="center">
+  <img src="docs/pipeline-flow.svg" alt="Pipeline Flow" width="700"/>
+</p>
 
-## Quick start
+## Features
+
+- **Multi-source scraping** — Arbeitnow (Germany-focused), Remotive (global remote), with extensible scraper base class
+- **LLM-powered scoring** — Gemini 2.5 Flash (free tier) or Groq as Tier 1 scorer; configurable threshold (default 6.0/10)
+- **Document generation** — Anthropic API tailors a LaTeX CV (compiled to PDF) and a .docx cover letter per job
+- **Discord review gate** — Approve/Reject buttons on each application bundle; decisions sync to Notion and database
+- **Notion dashboard** — Tracks every application with status, score, country, and document links
+- **Security-first design** — 5-stage JD sanitizer, LaTeX safety checks, Ed25519 Discord signature verification, parameterized SQL
+- **n8n orchestration** — 12-hour cron workflow triggers all pipeline phases via HTTP
+- **Dual LLM provider support** — Anthropic (production) or Groq (testing) for document generation, selectable via env var
+
+## Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Orchestration | n8n 1.91.3 (self-hosted) |
+| API | FastAPI + Uvicorn |
+| Scoring (Tier 1) | Gemini 2.5 Flash / Groq (Llama 3.3 70B) |
+| Documents (Tier 2) | Anthropic API (Claude Sonnet) |
+| CV Compilation | pdflatex (texlive) |
+| Cover Letters | python-docx |
+| Database | SQLite |
+| Delivery | Discord Bot API + Notion API |
+| Security | Ed25519 signatures, bleach, JD sanitizer |
+| Container | Docker Compose |
+
+## Quick Start
+
+### Prerequisites
+
+- Docker and Docker Compose
+- API keys: Google AI (Gemini), Anthropic, Discord bot token, Notion integration
+- A LaTeX CV template (`.tex` file)
+- A profile summary (`profile_summary.md` in your working directory)
+
+### Setup
 
 ```bash
-cp config/.env.example .env        # Fill in your tokens
-docker compose up -d               # Start n8n
+git clone https://github.com/Saad-Driouech/applai.git
+cd applai
+
+# Configure
+cp config/.env.example config/.env
+# Edit config/.env with your API keys and paths
+
+# Start services
+docker compose up -d
+
+# Verify setup
 chmod +x scripts/verify-setup.sh
-./scripts/verify-setup.sh          # Verify everything works
-open http://localhost:5678          # Open n8n
+./scripts/verify-setup.sh
+
+# Open n8n to import the pipeline workflow
+open http://localhost:5678
+# Import n8n/workflows/pipeline.json via the UI
 ```
 
-## Project structure
+### Discord Setup
+
+1. Create a Discord application at [discord.com/developers](https://discord.com/developers/applications)
+2. Create a bot, copy the token to `DISCORD_BOT_TOKEN`
+3. Copy the application's public key to `DISCORD_PUBLIC_KEY`
+4. Invite the bot to your server with Send Messages + Attach Files permissions
+5. Set the Interactions Endpoint URL to your public URL + `/discord/interactions`
+   - Use [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) for tunneling:
+     ```bash
+     cloudflared tunnel --url http://localhost:8000
+     ```
+
+## Configuration
+
+All configuration is via environment variables in `config/.env`. See [`config/.env.example`](config/.env.example) for the full list.
+
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `LLM_TIER1_PROVIDER` | Scoring LLM (`gemini` or `groq`) | `gemini` |
+| `DOCUMENT_LLM_PROVIDER` | Document generation LLM (`anthropic` or `groq`) | `anthropic` |
+| `SCORE_THRESHOLD` | Minimum score to queue a job (0-10) | `6.0` |
+| `APPLAI_WORKING_DIR` | Directory for job applications and profile files | — |
+| `APPLAI_CV_TEMPLATE` | Path to your LaTeX CV template | — |
+
+## API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/health` | Liveness check |
+| `GET` | `/stats` | Job counts grouped by status |
+| `POST` | `/scrape` | Run all active scrapers |
+| `POST` | `/score` | Score new jobs via Tier 1 LLM |
+| `POST` | `/generate` | Generate CV + cover letter for queued jobs |
+| `POST` | `/deliver` | Send ready bundles to Discord + Notion |
+| `POST` | `/discord/interactions` | Discord button webhook (Ed25519 verified) |
+
+## Project Structure
 
 ```
 applai/
+├── Dockerfile
 ├── docker-compose.yml
+├── requirements.txt
 ├── config/
 │   └── .env.example
 ├── src/
-│   ├── claude_bridge.py            # Safe Claude Code wrapper
-│   ├── scrapers/                   # Job board fetchers
-│   ├── matching/                   # Gemini scoring integration
-│   ├── documents/                  # Document generation helpers
-│   ├── feedback/                   # Learning system
+│   ├── api.py                  # FastAPI endpoints
+│   ├── pipeline.py             # Pipeline orchestrator (4 phases)
+│   ├── claude_bridge.py        # Safe Anthropic/Groq API bridge
+│   ├── config.py               # Dataclass-based configuration
+│   ├── database.py             # SQLite with parameterized queries
+│   ├── logger.py               # Structured logging + audit trail
+│   ├── scrapers/
+│   │   ├── base.py             # Abstract base with retry + dedup
+│   │   ├── arbeitnow.py        # Germany tech jobs
+│   │   └── remotive.py         # Global remote jobs
+│   ├── matching/
+│   │   ├── scorer.py           # Scoring orchestrator
+│   │   ├── gemini_client.py    # Google Gemini integration
+│   │   └── groq_client.py      # Groq integration
+│   ├── documents/
+│   │   ├── cv_generator.py     # LaTeX CV → PDF
+│   │   └── cover_letter.py     # Cover letter → .docx
+│   ├── delivery/
+│   │   ├── discord_bot.py      # Discord delivery + buttons
+│   │   └── notion_tracker.py   # Notion page management
 │   └── utils/
-│       ├── jd_sanitizer.py         # Stage 1: JD safety
-│       ├── latex_safety.py         # LaTeX validation + safe compilation
-│       ├── sanitize.py             # Scraper input sanitization
-│       └── database.py             # Parameterized SQL only
+│       ├── jd_sanitizer.py     # 5-stage JD sanitization
+│       ├── latex_safety.py     # LaTeX validation
+│       └── sanitize.py         # Scraper input sanitization
 ├── scripts/
-│   └── verify-setup.sh
-├── data/
-│   ├── n8n/                        # (gitignored)
-│   └── db/                         # (gitignored)
+│   ├── verify-setup.sh         # Post-deploy verification
+│   └── import-n8n-workflows.sh # n8n workflow import via API
+├── n8n/
+│   └── workflows/
+│       └── pipeline.json       # 12h cron workflow
 ├── tests/
-├── SECURITY.md
-└── README.md
+│   ├── test_config.py
+│   ├── test_database.py
+│   ├── test_jd_sanitizer.py
+│   └── test_latex_safety.py
+└── data/                       # gitignored
+    ├── db/                     # SQLite database
+    └── n8n/                    # n8n persistent data
 ```
+
+## Security
+
+- **No auto-submission** — System prepares everything; you click submit
+- **JD sanitization** — 5-stage pipeline strips prompt injection, hidden Unicode, and LaTeX exploits before any LLM sees the text
+- **LaTeX safety** — Generated `.tex` files scanned for dangerous primitives (`\write18`, `\input`, `\include`), compiled with `--no-shell-escape`
+- **Discord verification** — Ed25519 signature verification on every interaction webhook
+- **n8n hardened** — Environment variable access blocked, community packages disabled, capability drops, no-new-privileges
+- **Parameterized SQL** — All database queries use parameterized statements
+- **Localhost-only ports** — Both `8000` (API) and `5678` (n8n) bound to `127.0.0.1`
+
+See [SECURITY.md](SECURITY.md) for the full threat model and mitigation details.
+
+## Current Progress
+
+- [x] Job scraping (Arbeitnow, Remotive)
+- [x] LLM scoring (Gemini Flash, Groq)
+- [x] CV generation (LaTeX → PDF via Anthropic API)
+- [x] Cover letter generation (.docx via Anthropic API)
+- [x] Discord delivery with Approve/Reject buttons
+- [x] Discord interactions endpoint (Ed25519 verified)
+- [x] Notion tracking dashboard
+- [x] n8n 12h cron workflow
+- [x] End-to-end pipeline tested
+- [ ] Ollama fallback for offline/free LLM scoring
+- [ ] Feedback loop (approval history → tune scoring threshold)
+- [ ] Additional scraper sources
 
 ## Cost
 
 | Component | Cost |
 |-----------|------|
 | Gemini 2.5 Flash (scoring) | Free tier (1,000 req/day) |
-| Claude Code (documents) | Included in Claude Pro |
-| n8n | Free (self-hosted) |
-| **Total** | **~$0/month** (free tier) to **~$15/month** (at scale) |
+| Anthropic API (documents) | ~$0.02–0.05 per CV+cover letter pair |
+| n8n (orchestration) | Free (self-hosted) |
+| Discord + Notion | Free |
+| **Total** | **~$0–15/month** depending on volume |
+
+## License
+
+MIT

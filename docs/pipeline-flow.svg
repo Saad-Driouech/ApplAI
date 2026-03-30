@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 780 600" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#94a3b8"/>
+    </marker>
+    <marker id="arrowGreen" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#22c55e"/>
+    </marker>
+    <marker id="arrowRed" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#ef4444"/>
+    </marker>
+    <filter id="s" x="-4%" y="-4%" width="108%" height="112%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-opacity="0.08"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="780" height="600" rx="12" fill="#fafafa"/>
+
+  <!-- Title -->
+  <text x="390" y="32" text-anchor="middle" fill="#1e293b" font-size="16" font-weight="700">Pipeline Flow (every 12 hours)</text>
+
+  <!-- Step 1: Cron Trigger -->
+  <rect x="300" y="52" width="180" height="40" rx="20" fill="#6366f1" filter="url(#s)"/>
+  <text x="390" y="77" text-anchor="middle" fill="white" font-size="12" font-weight="600">n8n Cron (12h)</text>
+
+  <line x1="390" y1="92" x2="390" y2="118" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Step 2: Scrape -->
+  <rect x="260" y="120" width="260" height="68" rx="8" fill="white" stroke="#86efac" stroke-width="1.5" filter="url(#s)"/>
+  <rect x="260" y="120" width="260" height="26" rx="8" fill="#f0fdf4"/>
+  <rect x="260" y="138" width="260" height="8" fill="#f0fdf4"/>
+  <text x="280" y="140" fill="#166534" font-size="13" font-weight="700">1. POST /scrape</text>
+  <text x="280" y="160" fill="#6b7280" font-size="10">Fetch jobs from Arbeitnow + Remotive</text>
+  <text x="280" y="174" fill="#6b7280" font-size="10">Sanitize JDs, dedup, store in SQLite</text>
+
+  <line x1="390" y1="188" x2="390" y2="214" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Step 3: Score -->
+  <rect x="260" y="216" width="260" height="68" rx="8" fill="white" stroke="#93c5fd" stroke-width="1.5" filter="url(#s)"/>
+  <rect x="260" y="216" width="260" height="26" rx="8" fill="#eff6ff"/>
+  <rect x="260" y="234" width="260" height="8" fill="#eff6ff"/>
+  <text x="280" y="236" fill="#1e40af" font-size="13" font-weight="700">2. POST /score</text>
+  <text x="280" y="256" fill="#6b7280" font-size="10">Score each job 0-10 via Gemini/Groq</text>
+  <text x="280" y="270" fill="#6b7280" font-size="10">Queue if &ge; 6.0, skip otherwise</text>
+
+  <line x1="390" y1="284" x2="390" y2="310" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Step 4: Generate -->
+  <rect x="260" y="312" width="260" height="68" rx="8" fill="white" stroke="#fde047" stroke-width="1.5" filter="url(#s)"/>
+  <rect x="260" y="312" width="260" height="26" rx="8" fill="#fefce8"/>
+  <rect x="260" y="330" width="260" height="8" fill="#fefce8"/>
+  <text x="280" y="332" fill="#854d0e" font-size="13" font-weight="700">3. POST /generate</text>
+  <text x="280" y="352" fill="#6b7280" font-size="10">Anthropic API tailors CV (LaTeX&rarr;PDF)</text>
+  <text x="280" y="366" fill="#6b7280" font-size="10">+ cover letter (.docx) per queued job</text>
+
+  <line x1="390" y1="380" x2="390" y2="406" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Step 5: Deliver -->
+  <rect x="260" y="408" width="260" height="68" rx="8" fill="white" stroke="#f9a8d4" stroke-width="1.5" filter="url(#s)"/>
+  <rect x="260" y="408" width="260" height="26" rx="8" fill="#fdf2f8"/>
+  <rect x="260" y="426" width="260" height="8" fill="#fdf2f8"/>
+  <text x="280" y="428" fill="#9d174d" font-size="13" font-weight="700">4. POST /deliver</text>
+  <text x="280" y="448" fill="#6b7280" font-size="10">Send bundle to Discord with buttons</text>
+  <text x="280" y="462" fill="#6b7280" font-size="10">Create Notion page (Ready for Review)</text>
+
+  <line x1="390" y1="476" x2="390" y2="502" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Step 6: Human Decision -->
+  <rect x="290" y="504" width="200" height="44" rx="8" fill="white" stroke="#6366f1" stroke-width="2" filter="url(#s)"/>
+  <text x="390" y="522" text-anchor="middle" fill="#4338ca" font-size="12" font-weight="700">You: Approve or Reject</text>
+  <text x="390" y="538" text-anchor="middle" fill="#6b7280" font-size="10">via Discord buttons</text>
+
+  <!-- Approve branch -->
+  <line x1="340" y1="548" x2="180" y2="578" stroke="#22c55e" stroke-width="1.5" marker-end="url(#arrowGreen)"/>
+  <rect x="80" y="562" width="180" height="30" rx="6" fill="#22c55e"/>
+  <text x="170" y="582" text-anchor="middle" fill="white" font-size="11" font-weight="600">Queued in Notion &rarr; Apply</text>
+
+  <!-- Reject branch -->
+  <line x1="440" y1="548" x2="600" y2="578" stroke="#ef4444" stroke-width="1.5" marker-end="url(#arrowRed)"/>
+  <rect x="520" y="562" width="180" height="30" rx="6" fill="#ef4444"/>
+  <text x="610" y="582" text-anchor="middle" fill="white" font-size="11" font-weight="600">Discarded in Notion</text>
+
+  <!-- Time annotations -->
+  <text x="560" y="160" fill="#a3a3a3" font-size="10" font-style="italic">~5s</text>
+  <text x="560" y="256" fill="#a3a3a3" font-size="10" font-style="italic">~3 min (50 jobs)</text>
+  <text x="560" y="352" fill="#a3a3a3" font-size="10" font-style="italic">~30s per job</text>
+  <text x="560" y="448" fill="#a3a3a3" font-size="10" font-style="italic">~2s per bundle</text>
+</svg>
