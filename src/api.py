@@ -171,7 +171,7 @@ def _process_decision(app_id: str, decision: str, msg_id: str) -> None:
 
     with db.get_conn(cfg.paths.db_path) as conn:
         row = conn.execute(
-            """SELECT a.*, j.title, j.id as job_id
+            """SELECT a.*, j.title, j.company, j.country, j.id as job_id
                FROM applications a
                JOIN jobs j ON a.job_id = j.id
                WHERE a.id = ?""",
@@ -184,7 +184,31 @@ def _process_decision(app_id: str, decision: str, msg_id: str) -> None:
 
     app = dict(row)
 
-    # Update DB
+    # Handle file operations based on decision
+    from src.utils.file_manager import promote_to_final, cleanup_pending
+    from pathlib import Path
+
+    if decision == "approved":
+        pending = Path(app.get("cv_path", "")).parent
+        candidate_name = os.environ.get("CANDIDATE_NAME", "Candidate")
+        paths = promote_to_final(
+            pending=pending,
+            working_dir=cfg.paths.working_dir,
+            country=app.get("country", ""),
+            company=app.get("company", ""),
+            candidate_name=candidate_name,
+        )
+        # Update DB with final paths
+        with db.get_conn(cfg.paths.db_path) as conn:
+            conn.execute(
+                "UPDATE applications SET cv_path = ?, cover_letter_path = ? WHERE id = ?",
+                (paths["cv_path"], paths["cover_letter_path"], app_id),
+            )
+    else:
+        pending = Path(app.get("cv_path", "")).parent
+        cleanup_pending(pending)
+
+    # Update DB status
     new_status = "approved" if decision == "approved" else "rejected"
     with db.get_conn(cfg.paths.db_path) as conn:
         db.record_user_decision(

@@ -93,3 +93,19 @@ def cleanup_pending(pending: Path) -> None:
     if pending.exists() and pending.is_dir():
         shutil.rmtree(pending)
         log.info("Cleaned up pending folder: %s", pending)
+
+
+def cleanup_stale_pending(working_dir: Path, max_age_hours: int = 72) -> int:
+    """Delete pending folders older than max_age_hours. Returns count deleted."""
+    import time
+    base = working_dir / ".pending"
+    if not base.exists():
+        return 0
+    cutoff = time.time() - max_age_hours * 3600
+    deleted = 0
+    for folder in base.iterdir():
+        if folder.is_dir() and folder.stat().st_mtime < cutoff:
+            shutil.rmtree(folder)
+            log.info("Cleaned up stale pending folder: %s", folder.name)
+            deleted += 1
+    return deleted

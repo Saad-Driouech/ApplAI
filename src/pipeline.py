@@ -135,8 +135,11 @@ def phase_generate(cfg) -> int:
     """Generate CV + cover letter for all 'queued' jobs."""
     from src.documents.cv_generator import CVGenerator
     from src.documents.cover_letter import CoverLetterGenerator
+    from src.utils.file_manager import cleanup_stale_pending
 
     import os
+
+    cleanup_stale_pending(cfg.paths.working_dir)
 
     # CV template
     cv_template_path = Path(os.environ.get("APPLAI_CV_TEMPLATE", ""))
