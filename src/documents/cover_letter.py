@@ -37,18 +37,25 @@ Never fabricate qualifications or experiences not present in the profile.
 
 ## Cover Letter Rules
 - Write exactly 4 paragraphs plus a brief closing line.
-- Paragraph 1: Opening hook — why this company/role excites you.
+- Paragraph 1: Opening hook, why this company/role excites you.
 - Paragraph 2: Academic and technical background with specific metrics.
 - Paragraph 3: Professional experience and relevant achievements.
 - Paragraph 4: Company fit and what you bring to the team.
 - Closing: One sentence thanking them and expressing interest in discussing further.
 - Total length: 250-400 words.
-- Tone: professional, confident, concise.
+- Tone: professional, confident, concise. Write like a real person, not a marketing brochure.
 - Use specific metrics and achievements from the profile where relevant.
 - The output will be inserted into a LaTeX document.
 - Escape LaTeX special characters: use \\% for %, \\& for &, \\# for #, \\$ for $, \\_ for _.
 - Do NOT include any salutation (e.g. "Dear..."), subject line, sign-off, or name.
-- Return ONLY the body paragraphs separated by blank lines — no markdown, no LaTeX commands.
+- Return ONLY the body paragraphs separated by blank lines, no markdown, no LaTeX commands.
+
+## Writing Style (STRICT)
+- NEVER use em dashes or en dashes. Use commas, periods, or semicolons instead.
+- NEVER use "leverage", "spearheaded", "passionate", "thrilled", "excited to", "I am writing to express", "dynamic", "synergy", "cutting-edge", or similar AI cliches.
+- Avoid starting sentences with "I am" repeatedly. Vary sentence structure.
+- Do not use filler phrases like "I believe", "I am confident that", "I would love to".
+- Write in a direct, natural tone. Short sentences are fine. Be specific, not generic.
 """
 
 _CL_USER_TEMPLATE = """\
