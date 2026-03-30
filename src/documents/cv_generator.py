@@ -179,16 +179,12 @@ class CVGenerator:
             log.debug("pdflatex pass %d: %s", pass_num, tex_path.name)
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
             if proc.returncode != 0:
-                # pdflatex writes errors to stdout (the .log transcript), not stderr
                 output_tail = (proc.stdout or proc.stderr or "")[-3000:]
-                log.error("pdflatex output:\n%s", output_tail)
-                raise CVGenerationError(
-                    f"pdflatex failed (pass {pass_num}, exit {proc.returncode})"
-                )
+                log.warning("pdflatex pass %d exited with %d:\n%s", pass_num, proc.returncode, output_tail)
 
         pdf_path = output_dir / "cv.pdf"
         if not pdf_path.exists():
-            raise CVGenerationError("pdflatex succeeded but cv.pdf not found")
+            raise CVGenerationError("pdflatex failed — cv.pdf not produced")
 
         return pdf_path
 

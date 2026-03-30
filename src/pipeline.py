@@ -90,19 +90,19 @@ def phase_score(cfg) -> dict:
     from src.matching.gemini_client import GeminiClient
     from src.matching.scorer import Scorer
 
-    # CV summary — loaded from a text file if present, else a placeholder
-    cv_summary_path = cfg.paths.working_dir / "cv_summary.txt"
-    if cv_summary_path.exists():
-        cv_summary = cv_summary_path.read_text(encoding="utf-8")
+    # Profile summary — used for scoring context
+    profile_path = cfg.paths.working_dir / "profile_summary.md"
+    if profile_path.exists():
+        cv_summary = profile_path.read_text(encoding="utf-8")
     else:
         log.warning(
-            "cv_summary.txt not found at %s — using placeholder. "
+            "profile_summary.md not found at %s — using placeholder. "
             "Create this file for accurate scoring.",
-            cv_summary_path,
+            profile_path,
         )
         cv_summary = (
             "No profile summary provided. "
-            "Create cv_summary.txt in your working directory for accurate scoring."
+            "Create profile_summary.md in your working directory for accurate scoring."
         )
 
     if cfg.tier1_provider == "groq":
@@ -164,6 +164,9 @@ def phase_generate(cfg) -> int:
 
     candidate_name = os.environ.get("CANDIDATE_NAME", "Candidate Name")
     candidate_email = os.environ.get("CANDIDATE_EMAIL", "candidate@email.com")
+    candidate_address = os.environ.get("CANDIDATE_ADDRESS", "")
+    candidate_phone = os.environ.get("CANDIDATE_PHONE", "")
+    candidate_city = os.environ.get("CANDIDATE_CITY", "")
 
     cv_gen = CVGenerator(
         template_path=cv_template_path,
@@ -177,6 +180,9 @@ def phase_generate(cfg) -> int:
         profile_path=profile_path,
         candidate_name=candidate_name,
         candidate_email=candidate_email,
+        candidate_address=candidate_address,
+        candidate_phone=candidate_phone,
+        candidate_city=candidate_city,
     )
 
     generated = 0

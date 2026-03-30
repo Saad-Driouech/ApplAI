@@ -77,17 +77,27 @@ class CoverLetterError(Exception):
     pass
 
 
+_COUNTRY_NAMES = {
+    "DE": "Germany", "AE": "UAE", "SA": "Saudi Arabia",
+    "CH": "Switzerland", "QA": "Qatar", "NL": "Netherlands",
+    "US": "United States", "GB": "United Kingdom", "FR": "France",
+}
+
+
 class CoverLetterGenerator:
     """
     Generates a tailored PDF cover letter for a specific job.
 
     Args:
-        template_path:   Path to the base .tex cover letter template.
-        output_dir:      Base directory where job folders are created.
-        profile_path:    Path to profile_summary.md — read fresh on every call.
-        candidate_name:  Used in sender info and sign-off.
-        candidate_email: Included in the sender header.
-        pdflatex_bin:    Path to the pdflatex binary.
+        template_path:     Path to the base .tex cover letter template.
+        output_dir:        Base directory where job folders are created.
+        profile_path:      Path to profile_summary.md — read fresh on every call.
+        candidate_name:    Used in sender info and sign-off.
+        candidate_email:   Included in the sender header.
+        candidate_address: Street address line (e.g. "Musterstr. 1, 90402 Nuremberg").
+        candidate_phone:   Phone number.
+        candidate_city:    City the letter is sent from (e.g. "Nuremberg").
+        pdflatex_bin:      Path to the pdflatex binary.
     """
 
     def __init__(
@@ -97,6 +107,9 @@ class CoverLetterGenerator:
         profile_path: Optional[Path],
         candidate_name: str,
         candidate_email: str,
+        candidate_address: str = "",
+        candidate_phone: str = "",
+        candidate_city: str = "",
         pdflatex_bin: str = "pdflatex",
     ):
         self._template = template_path
@@ -104,6 +117,9 @@ class CoverLetterGenerator:
         self._profile_path = profile_path
         self._candidate_name = candidate_name
         self._candidate_email = candidate_email
+        self._candidate_address = candidate_address
+        self._candidate_phone = candidate_phone
+        self._candidate_city = candidate_city
         self._pdflatex = pdflatex_bin
 
         if not template_path.exists():
@@ -185,19 +201,27 @@ class CoverLetterGenerator:
         country = job.get("country", "")
         city = job.get("city", "")
 
+        country_name = _COUNTRY_NAMES.get(country, country)
+        # Build recipient city line from job city + country
+        recipient_city = ""
+        if city and city.lower() != "remote":
+            recipient_city = f"{city}, {country_name}" if country_name else city
+        elif country_name:
+            recipient_city = country_name
+
         # Sender info
         tex = tex.replace("SENDER-NAME", _escape_latex(self._candidate_name))
         tex = tex.replace("SENDER-EMAIL", _escape_latex(self._candidate_email))
-        tex = tex.replace("SENDER-ADDRESS", "")
-        tex = tex.replace("SENDER-PHONE", "")
-        tex = tex.replace("SENDER-CITY", _escape_latex(city) if city else "")
+        tex = tex.replace("SENDER-ADDRESS", _escape_latex(self._candidate_address))
+        tex = tex.replace("SENDER-PHONE", _escape_latex(self._candidate_phone))
+        tex = tex.replace("SENDER-CITY", _escape_latex(self._candidate_city))
 
-        # Recipient info — we only know the company name
+        # Recipient info
         tex = tex.replace("RECIPIENT-COMPANY", _escape_latex(company))
         tex = tex.replace("RECIPIENT-NAME", "")
         tex = tex.replace("RECIPIENT-STREET", "")
-        tex = tex.replace("RECIPIENT-POSTCODE-CITY", "")
-        tex = tex.replace("RECIPIENT-COUNTRY", _escape_latex(country) if country else "")
+        tex = tex.replace("RECIPIENT-POSTCODE-CITY", _escape_latex(recipient_city))
+        tex = tex.replace("RECIPIENT-COUNTRY", "")
 
         # Date
         tex = tex.replace("LETTER-DATE", datetime.now(timezone.utc).strftime("%d %B %Y"))
@@ -254,14 +278,11 @@ class CoverLetterGenerator:
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
             if proc.returncode != 0:
                 output_tail = (proc.stdout or proc.stderr or "")[-3000:]
-                log.error("pdflatex output:\n%s", output_tail)
-                raise CoverLetterError(
-                    f"pdflatex failed (pass {pass_num}, exit {proc.returncode})"
-                )
+                log.warning("pdflatex pass %d exited with %d:\n%s", pass_num, proc.returncode, output_tail)
 
         pdf_path = output_dir / "cover_letter.pdf"
         if not pdf_path.exists():
-            raise CoverLetterError("pdflatex succeeded but cover_letter.pdf not found")
+            raise CoverLetterError("pdflatex failed — cover_letter.pdf not produced")
 
         return pdf_path
 
