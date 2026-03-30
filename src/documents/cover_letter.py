@@ -259,8 +259,10 @@ class CoverLetterGenerator:
         # Closing
         tex = tex.replace("CLOSING-LINE", "Kind regards,")
 
-        # Clean up empty lines from unfilled optional fields
-        tex = re.sub(r'\n\s*\\\\\s*\n', '\n', tex)
+        # Clean up lines that are just whitespace + \\ (from empty placeholders)
+        tex = re.sub(r'^\s*\\\\\s*$', '', tex, flags=re.MULTILINE)
+        # Remove resulting blank lines
+        tex = re.sub(r'\n{3,}', '\n\n', tex)
 
         return tex
 
