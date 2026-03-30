@@ -293,8 +293,14 @@ class CoverLetterGenerator:
 
         return pdf_path
 
+    _COUNTRY_FOLDERS = {
+        "DE": "germany", "AE": "uae", "SA": "ksa",
+        "CH": "switzerland", "NL": "netherlands", "US": "us",
+        "QA": "qatar", "GB": "uk", "FR": "france",
+    }
+
     def _job_folder(self, job: dict) -> Path:
+        country_code = job.get("country", "").upper()
+        country_dir = self._COUNTRY_FOLDERS.get(country_code, country_code.lower() or "other")
         company = sanitize_company_for_path(job.get("company", "unknown"))
-        title_slug = re.sub(r"[^\w\-]", "_", job.get("title", "job"))[:40]
-        uid = job.get("id", str(uuid.uuid4()))[:8]
-        return self._output_dir / f"{company}_{title_slug}_{uid}"
+        return self._output_dir / country_dir / company

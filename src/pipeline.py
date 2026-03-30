@@ -170,13 +170,13 @@ def phase_generate(cfg) -> int:
 
     cv_gen = CVGenerator(
         template_path=cv_template_path,
-        output_dir=cfg.paths.working_dir / "applications",
+        output_dir=cfg.paths.working_dir,
         profile_path=profile_path,
     )
 
     cl_gen = CoverLetterGenerator(
         template_path=cl_template_path,
-        output_dir=cfg.paths.working_dir / "applications",
+        output_dir=cfg.paths.working_dir,
         profile_path=profile_path,
         candidate_name=candidate_name,
         candidate_email=candidate_email,
