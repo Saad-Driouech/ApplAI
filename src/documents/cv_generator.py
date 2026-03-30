@@ -95,14 +95,14 @@ class CVGenerator:
         if not template_path.exists():
             raise FileNotFoundError(f"CV template not found: {template_path}")
 
-    def generate(self, job: dict, gemini_reasoning: str = "") -> Path:
+    def generate(self, job: dict, gemini_reasoning: str = "", output_folder: Path | None = None) -> Path:
         """
         Generate a tailored PDF CV for *job*.
 
         Returns the path to the compiled .pdf file.
         Raises CVGenerationError on any failure.
         """
-        job_folder = self._job_folder(job)
+        job_folder = output_folder or self._job_folder(job)
         job_folder.mkdir(parents=True, exist_ok=True)
 
         tex_source = self._tailor_with_api(job, gemini_reasoning)

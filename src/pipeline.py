@@ -197,10 +197,14 @@ def phase_generate(cfg) -> int:
         try:
             db.update_status_direct(cfg.paths.db_path, job_id, "generating")
 
-            cv_path = cv_gen.generate(job, gemini_reasoning=reasoning)
-            cl_path = cl_gen.generate(job, gemini_reasoning=reasoning)
-
             app_id = str(uuid.uuid4())
+            from src.utils.file_manager import pending_dir
+            pending = pending_dir(cfg.paths.working_dir, app_id)
+            pending.mkdir(parents=True, exist_ok=True)
+
+            cv_path = cv_gen.generate(job, gemini_reasoning=reasoning, output_folder=pending)
+            cl_path = cl_gen.generate(job, gemini_reasoning=reasoning, output_folder=pending)
+
             with db.get_conn(cfg.paths.db_path) as conn:
                 db.create_application(conn, {
                     "id": app_id,

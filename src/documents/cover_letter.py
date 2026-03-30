@@ -132,7 +132,7 @@ class CoverLetterGenerator:
         if not template_path.exists():
             raise FileNotFoundError(f"Cover letter template not found: {template_path}")
 
-    def generate(self, job: dict, gemini_reasoning: str = "") -> Path:
+    def generate(self, job: dict, gemini_reasoning: str = "", output_folder: Path | None = None) -> Path:
         """
         Generate a tailored PDF cover letter for *job*.
 
@@ -142,7 +142,7 @@ class CoverLetterGenerator:
         body_text = self._generate_body(job, gemini_reasoning)
         tex_source = self._fill_template(body_text, job)
 
-        job_folder = self._job_folder(job)
+        job_folder = output_folder or self._job_folder(job)
         job_folder.mkdir(parents=True, exist_ok=True)
 
         tex_path = job_folder / "cover_letter.tex"
