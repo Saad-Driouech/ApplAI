@@ -70,7 +70,7 @@
   <line x1="535" y1="150" x2="655" y2="150" stroke="#fef08a" stroke-width="1"/>
   <text x="595" y="172" text-anchor="middle" fill="#a16207" font-size="11">Anthropic API</text>
   <text x="595" y="190" text-anchor="middle" fill="#a16207" font-size="11">(Claude Sonnet)</text>
-  <text x="595" y="216" text-anchor="middle" fill="#6b7280" font-size="10">CV: LaTeX &rarr; PDF</text>
+  <text x="595" y="216" text-anchor="middle" fill="#6b7280" font-size="10">CV: LaTeX → PDF</text>
   <text x="595" y="232" text-anchor="middle" fill="#6b7280" font-size="10">Cover Letter: .docx</text>
   <text x="595" y="256" text-anchor="middle" fill="#6b7280" font-size="10">LaTeX safety check</text>
 
@@ -98,7 +98,7 @@
   <text x="380" y="358" text-anchor="middle" fill="#4338ca" font-size="13" font-weight="700">Notion</text>
   <line x1="310" y1="366" x2="450" y2="366" stroke="#e0e7ff" stroke-width="1"/>
   <text x="380" y="386" text-anchor="middle" fill="#6b7280" font-size="10">Job tracker dashboard</text>
-  <text x="380" y="402" text-anchor="middle" fill="#6b7280" font-size="10">Status: Ready &rarr; Queued &rarr; Applied</text>
+  <text x="380" y="402" text-anchor="middle" fill="#6b7280" font-size="10">Status: Ready → Queued → Applied</text>
   <text x="380" y="418" text-anchor="middle" fill="#6b7280" font-size="10">Score, country, documents</text>
 
   <!-- FastAPI -->

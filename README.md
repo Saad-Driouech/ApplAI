@@ -20,11 +20,13 @@ Scrapes job boards, scores relevance with LLMs, generates tailored CVs and cover
 
 - **Multi-source scraping** — Arbeitnow (Germany-focused), Remotive (global remote), with extensible scraper base class
 - **LLM-powered scoring** — Gemini 2.5 Flash (free tier) or Groq as Tier 1 scorer; configurable threshold (default 6.0/10)
-- **Document generation** — Anthropic API tailors a LaTeX CV (compiled to PDF) and a .docx cover letter per job
-- **Discord review gate** — Approve/Reject buttons on each application bundle; decisions sync to Notion and database
+- **Document generation** — Anthropic API tailors a LaTeX CV and a LaTeX cover letter, both compiled to PDF
+- **Discord review gate** — Approve/Reject buttons on each application bundle (two PDFs); decisions sync to Notion and database
 - **Notion dashboard** — Tracks every application with status, score, country, and document links
 - **Security-first design** — 5-stage JD sanitizer, LaTeX safety checks, Ed25519 Discord signature verification, parameterized SQL
 - **n8n orchestration** — 12-hour cron workflow triggers all pipeline phases via HTTP
+- **Natural writing style** — Strict anti-AI-slop rules in prompts (no em dashes, no "leverage/spearheaded/synergy", direct tone)
+- **Country-based output** — Documents saved in `{country}/{company}/` matching your existing job applications folder structure
 - **Dual LLM provider support** — Anthropic (production) or Groq (testing) for document generation, selectable via env var
 
 ## Tech Stack
@@ -36,7 +38,7 @@ Scrapes job boards, scores relevance with LLMs, generates tailored CVs and cover
 | Scoring (Tier 1) | Gemini 2.5 Flash / Groq (Llama 3.3 70B) |
 | Documents (Tier 2) | Anthropic API (Claude Sonnet) |
 | CV Compilation | pdflatex (texlive) |
-| Cover Letters | python-docx |
+| Cover Letters | pdflatex (texlive) |
 | Database | SQLite |
 | Delivery | Discord Bot API + Notion API |
 | Security | Ed25519 signatures, bleach, JD sanitizer |
@@ -48,8 +50,8 @@ Scrapes job boards, scores relevance with LLMs, generates tailored CVs and cover
 
 - Docker and Docker Compose
 - API keys: Google AI (Gemini), Anthropic, Discord bot token, Notion integration
-- A LaTeX CV template (`.tex` file)
-- A profile summary (`profile_summary.md` in your working directory)
+- A LaTeX CV template (`.tex` file) and a LaTeX cover letter template (`.tex` file)
+- A profile summary (`profile_summary.md` in your working directory) — used for both scoring and document generation
 
 ### Setup
 
@@ -96,6 +98,12 @@ All configuration is via environment variables in `config/.env`. See [`config/.e
 | `SCORE_THRESHOLD` | Minimum score to queue a job (0-10) | `6.0` |
 | `APPLAI_WORKING_DIR` | Directory for job applications and profile files | — |
 | `APPLAI_CV_TEMPLATE` | Path to your LaTeX CV template | — |
+| `APPLAI_CL_TEMPLATE` | Path to your LaTeX cover letter template | — |
+| `CANDIDATE_NAME` | Your full name (used in cover letters) | — |
+| `CANDIDATE_EMAIL` | Your email | — |
+| `CANDIDATE_PHONE` | Your phone number | — |
+| `CANDIDATE_ADDRESS` | Your address line | — |
+| `CANDIDATE_CITY` | City you're writing from | — |
 
 ## API Endpoints
 
@@ -135,7 +143,7 @@ applai/
 │   │   └── groq_client.py      # Groq integration
 │   ├── documents/
 │   │   ├── cv_generator.py     # LaTeX CV → PDF
-│   │   └── cover_letter.py     # Cover letter → .docx
+│   │   └── cover_letter.py     # LaTeX cover letter → PDF
 │   ├── delivery/
 │   │   ├── discord_bot.py      # Discord delivery + buttons
 │   │   └── notion_tracker.py   # Notion page management
@@ -176,7 +184,7 @@ See [SECURITY.md](SECURITY.md) for the full threat model and mitigation details.
 - [x] Job scraping (Arbeitnow, Remotive)
 - [x] LLM scoring (Gemini Flash, Groq)
 - [x] CV generation (LaTeX → PDF via Anthropic API)
-- [x] Cover letter generation (.docx via Anthropic API)
+- [x] Cover letter generation (LaTeX → PDF via Anthropic API)
 - [x] Discord delivery with Approve/Reject buttons
 - [x] Discord interactions endpoint (Ed25519 verified)
 - [x] Notion tracking dashboard
