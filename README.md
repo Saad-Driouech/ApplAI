@@ -20,8 +20,10 @@ Scrapes job boards, scores relevance with LLMs, generates tailored CVs and cover
 
 - **Multi-source scraping** — Arbeitnow (Germany-focused), Remotive (global remote), with extensible scraper base class
 - **LLM-powered scoring** — Gemini 2.5 Flash (free tier) or Groq as Tier 1 scorer; configurable threshold (default 6.0/10)
+- **AI keyword pre-filter** — Jobs without AI/ML keywords in title or description are auto-skipped before LLM scoring, saving API quota
 - **Document generation** — Anthropic API tailors a LaTeX CV and a LaTeX cover letter, both compiled to PDF
-- **Discord review gate** — Approve/Reject buttons on each application bundle (two PDFs); decisions sync to Notion and database
+- **Pending folder workflow** — Documents generated into `.pending/{app_id}/`, promoted to `{country}/{company}/` on approve, deleted on reject
+- **Discord review gate** — Approve/Reject buttons on each application bundle (two PDFs + job link); decisions sync to Notion and database
 - **Notion dashboard** — Tracks every application with status, score, country, and document links
 - **Security-first design** — 5-stage JD sanitizer, LaTeX safety checks, Ed25519 Discord signature verification, parameterized SQL
 - **n8n orchestration** — 12-hour cron workflow triggers all pipeline phases via HTTP
@@ -138,7 +140,7 @@ applai/
 │   │   ├── arbeitnow.py        # Germany tech jobs
 │   │   └── remotive.py         # Global remote jobs
 │   ├── matching/
-│   │   ├── scorer.py           # Scoring orchestrator
+│   │   ├── scorer.py           # Scoring orchestrator + keyword pre-filter
 │   │   ├── gemini_client.py    # Google Gemini integration
 │   │   └── groq_client.py      # Groq integration
 │   ├── documents/
@@ -148,6 +150,7 @@ applai/
 │   │   ├── discord_bot.py      # Discord delivery + buttons
 │   │   └── notion_tracker.py   # Notion page management
 │   └── utils/
+│       ├── file_manager.py     # Pending/final document workflow
 │       ├── jd_sanitizer.py     # 5-stage JD sanitization
 │       ├── latex_safety.py     # LaTeX validation
 │       └── sanitize.py         # Scraper input sanitization

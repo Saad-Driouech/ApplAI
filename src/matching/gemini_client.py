@@ -31,7 +31,7 @@ from src.logger import audit, get_logger
 log = get_logger(__name__)
 
 _SCORE_PROMPT_TEMPLATE = """\
-You are a precise job-fit evaluator. Score how well the candidate fits this job.
+You are a job-fit evaluator for an AI/ML professional. Score how well the candidate fits this job.
 
 ## Candidate Profile
 {cv_summary}
@@ -50,14 +50,23 @@ Return ONLY a JSON object with exactly these keys:
 - "must_haves_met": list of strings (key requirements the candidate satisfies)
 - "gaps": list of strings (important missing skills or experience)
 
-Score thresholds:
-  8-10: Excellent fit — apply immediately
-  6-8:  Good fit — worth tailoring documents
-  4-6:  Partial fit — missing key requirements
-  0-4:  Poor fit — skip
+## Scoring Rubric
+  9-10: Near-perfect match — core stack, seniority, and domain all align
+  7-9:  Strong fit — meets most requirements, minor gaps are learnable
+  5-7:  Decent fit — relevant AI/ML background, some requirements unmet
+  3-5:  Weak fit — tangential overlap, significant gaps
+  0-3:  No fit — completely different domain or seniority
 
-Be strict. Prioritise hard requirements (visa/work authorization, years of experience, \
-core tech stack). Return raw JSON, no markdown fences.
+## Scoring Guidelines
+- AI/ML roles where the candidate has relevant experience should start at 5.0 minimum, \
+even if not every listed requirement is met. Transferable ML skills matter.
+- Weigh core technical skills (Python, ML frameworks, model development) more than \
+nice-to-haves (specific cloud certifications, niche domain knowledge).
+- Years-of-experience requirements are soft guidelines, not hard cutoffs. \
+Strong demonstrated skills can compensate for fewer years.
+- Visa/work-authorization mismatches are a real blocker — penalize heavily.
+- "Preferred" or "nice to have" requirements should NOT lower the score significantly.
+- Return raw JSON, no markdown fences.
 """
 
 
