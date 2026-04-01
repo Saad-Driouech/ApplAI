@@ -196,6 +196,11 @@ class DiscordDelivery:
                 {"name": "Country",  "value": job.get("country", "—"), "inline": True},
                 {"name": "Score",    "value": f"{score:.1f} / 10", "inline": True},
                 {
+                    "name": "Job Link",
+                    "value": job.get("source_url") or "—",
+                    "inline": False,
+                },
+                {
                     "name": "Why it fits",
                     "value": (reasoning[:500] + "…") if len(reasoning) > 500 else reasoning or "—",
                     "inline": False,

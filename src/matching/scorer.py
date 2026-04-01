@@ -3,9 +3,13 @@ Job scoring orchestrator.
 
 Reads 'new' jobs from the database, sends each through the Gemini client,
 stores the score, and marks jobs as 'queued' (above threshold) or 'skipped'.
+
+A keyword pre-filter runs first: jobs whose title + description contain zero
+AI/ML-related terms are auto-skipped without an LLM call (saves quota).
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -15,6 +19,51 @@ from src.matching.gemini_client import BudgetExceeded, ScoreResult
 from src.utils.jd_sanitizer import sanitize_jd
 
 log = get_logger(__name__)
+
+# ── Keyword pre-filter ────────────────────────────────────────────────────
+# Jobs that mention NONE of these terms are auto-skipped before LLM scoring.
+# Keep this list broad — false negatives (skipping a good job) are worse than
+# false positives (scoring a mediocre one).
+_AI_KEYWORDS = {
+    # General AI/ML terms
+    "artificial intelligence", "machine learning", "deep learning",
+    "neural network", "natural language processing", "nlp",
+    "computer vision", "reinforcement learning", "generative ai",
+    "genai", "gen ai", "llm", "large language model",
+    "foundation model", "transformer", "diffusion model",
+    "conversational ai", "chatbot", "recommendation system",
+    "predictive model", "anomaly detection", "speech recognition",
+    "image recognition", "object detection", "semantic search",
+    "vector database", "retrieval augmented", "fine-tuning",
+    "prompt engineering", "mlops", "aiops", "data science",
+    "data scientist", "ml engineer", "ai engineer", "applied scientist",
+    "research scientist", "ai researcher",
+    # Frameworks and libraries
+    "pytorch", "tensorflow", "keras", "scikit-learn", "sklearn",
+    "hugging face", "huggingface", "langchain", "llamaindex",
+    "openai", "anthropic", "spacy", "nltk", "opencv",
+    "jax", "xgboost", "lightgbm", "catboost",
+    "pandas", "numpy", "scipy", "matplotlib",
+    "spark mllib", "sagemaker", "vertex ai", "azure ml",
+    "bedrock", "databricks", "mlflow", "kubeflow", "airflow",
+    "wandb", "weights and biases", "dvc",
+    "onnx", "triton", "tensorrt", "vllm",
+    # Abbreviations commonly found in JDs
+    "ai/ml", "ml/ai", "ai ", " ai,", " ai.", "(ai)",
+    "cv/nlp", "nlp/cv", "dl ", " dl,", " dl.",
+}
+
+# Pre-compile a single regex for speed: match any keyword as a whole word
+_AI_PATTERN = re.compile(
+    "|".join(re.escape(kw) for kw in sorted(_AI_KEYWORDS, key=len, reverse=True)),
+    re.IGNORECASE,
+)
+
+
+def has_ai_keywords(title: str, description: str) -> bool:
+    """Return True if the job title or description contains at least one AI-related keyword."""
+    text = f"{title} {description}"
+    return bool(_AI_PATTERN.search(text))
 
 
 class Scorer:
@@ -43,9 +92,9 @@ class Scorer:
     def run(self) -> dict[str, int]:
         """
         Score all 'new' jobs in the database.
-        Returns a summary dict: {scored, queued, skipped, errors, quota_hit}
+        Returns a summary dict: {scored, queued, skipped, filtered, errors, quota_hit}
         """
-        stats = {"scored": 0, "queued": 0, "skipped": 0, "errors": 0, "quota_hit": 0}
+        stats = {"scored": 0, "queued": 0, "skipped": 0, "filtered": 0, "errors": 0, "quota_hit": 0}
 
         with db.get_conn(self._db_path) as conn:
             jobs = db.get_jobs_by_status(conn, "new", limit=self._batch_size)
@@ -55,6 +104,23 @@ class Scorer:
         for row in jobs:
             job = dict(row)
             job_id = job["id"]
+
+            # ── Keyword pre-filter: skip non-AI jobs without LLM call ────
+            if not has_ai_keywords(job.get("title", ""), job.get("description", "")):
+                with db.get_conn(self._db_path) as conn:
+                    db.update_score(
+                        conn,
+                        job_id=job_id,
+                        score=0.0,
+                        reasoning="Auto-skipped: no AI/ML keywords in title or description",
+                        new_status="skipped",
+                    )
+                stats["filtered"] += 1
+                log.debug(
+                    "Job filtered (no AI keywords) | %s @ %s",
+                    job["title"], job["company"],
+                )
+                continue
 
             try:
                 result = self._score_one(job)
