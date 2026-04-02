@@ -21,7 +21,7 @@ from src.logger import get_logger
 log = get_logger(__name__)
 
 # Bump this when the schema changes.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _DDL = """
 PRAGMA journal_mode=WAL;
@@ -85,7 +85,24 @@ CREATE TABLE IF NOT EXISTS scrape_runs (
     jobs_new    INTEGER DEFAULT 0,
     error       TEXT
 );
+
+-- ── Feedback events ──────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS feedback_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id      TEXT NOT NULL REFERENCES jobs(id),
+    event_type  TEXT NOT NULL,             -- "rescue", "approve", "reject"
+    created_at  TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_feedback_job_id ON feedback_events(job_id);
+CREATE INDEX IF NOT EXISTS idx_feedback_type   ON feedback_events(event_type);
 """
+
+_MIGRATIONS = {
+    2: [
+        "ALTER TABLE jobs ADD COLUMN skip_reason TEXT",
+    ],
+}
 
 
 def _now() -> str:
@@ -109,19 +126,41 @@ def init_db(db_path: Path) -> sqlite3.Connection:
     conn = _connect(db_path)
     conn.executescript(_DDL)
 
-    # Record schema version if not already present
-    row = conn.execute(
-        "SELECT version FROM schema_meta WHERE version = ?", (SCHEMA_VERSION,)
-    ).fetchone()
-    if row is None:
+    # Determine current version
+    current = 0
+    try:
+        row = conn.execute(
+            "SELECT MAX(version) as v FROM schema_meta"
+        ).fetchone()
+        if row and row["v"]:
+            current = row["v"]
+    except sqlite3.OperationalError:
+        pass  # schema_meta doesn't exist yet
+
+    # Run pending migrations
+    for version in sorted(_MIGRATIONS.keys()):
+        if version > current:
+            for sql in _MIGRATIONS[version]:
+                try:
+                    conn.execute(sql)
+                except sqlite3.OperationalError as e:
+                    if "duplicate column" not in str(e).lower():
+                        raise
+            conn.execute(
+                "INSERT OR REPLACE INTO schema_meta (version, applied_at) VALUES (?, ?)",
+                (version, _now()),
+            )
+            conn.commit()
+            log.info("Applied database migration to version %d", version)
+
+    # Record current schema version if fresh DB
+    if current == 0:
         conn.execute(
-            "INSERT INTO schema_meta (version, applied_at) VALUES (?, ?)",
+            "INSERT OR REPLACE INTO schema_meta (version, applied_at) VALUES (?, ?)",
             (SCHEMA_VERSION, _now()),
         )
         conn.commit()
         log.info("Database initialised at schema version %d", SCHEMA_VERSION)
-    else:
-        log.debug("Database schema version %d already applied", SCHEMA_VERSION)
 
     return conn
 
@@ -174,14 +213,15 @@ def update_score(
     score: float,
     reasoning: str,
     new_status: str = "scored",
+    skip_reason: Optional[str] = None,
 ) -> None:
     conn.execute(
         """
         UPDATE jobs
-        SET score = ?, score_reasoning = ?, status = ?
+        SET score = ?, score_reasoning = ?, status = ?, skip_reason = ?
         WHERE id = ?
         """,
-        (score, reasoning, new_status, job_id),
+        (score, reasoning, new_status, skip_reason, job_id),
     )
 
 
@@ -271,3 +311,36 @@ def finish_scrape_run(
         """,
         (_now(), jobs_found, jobs_new, error, run_id),
     )
+
+
+# ── Feedback helpers ─────────────────────────────────────────────────────
+
+
+def record_feedback_event(
+    conn: sqlite3.Connection,
+    job_id: str,
+    event_type: str,
+) -> None:
+    conn.execute(
+        "INSERT INTO feedback_events (job_id, event_type, created_at) VALUES (?, ?, ?)",
+        (job_id, event_type, _now()),
+    )
+
+
+def get_recent_skipped(
+    conn: sqlite3.Connection,
+    days: int = 7,
+    limit: int = 20,
+) -> list[sqlite3.Row]:
+    """Get recently skipped jobs for the digest, ordered by score descending."""
+    return conn.execute(
+        """
+        SELECT id, title, company, country, score, skip_reason, source_url
+        FROM jobs
+        WHERE status = 'skipped'
+          AND scraped_at >= datetime('now', ?)
+        ORDER BY score DESC
+        LIMIT ?
+        """,
+        (f"-{days} days", limit),
+    ).fetchall()

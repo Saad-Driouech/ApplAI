@@ -82,12 +82,14 @@ class Scorer:
         cv_summary: str,
         score_threshold: float = 6.0,
         batch_size: int = 50,
+        user_preferences: str = "",
     ):
         self._db_path = db_path
         self._client = client
         self._cv_summary = cv_summary
         self._threshold = score_threshold
         self._batch_size = batch_size
+        self._user_preferences = user_preferences
 
     def run(self) -> dict[str, int]:
         """
@@ -114,6 +116,7 @@ class Scorer:
                         score=0.0,
                         reasoning="Auto-skipped: no AI/ML keywords in title or description",
                         new_status="skipped",
+                        skip_reason="keyword_filter",
                     )
                 stats["filtered"] += 1
                 log.debug(
@@ -143,6 +146,7 @@ class Scorer:
                     score=result.score,
                     reasoning=result.reasoning,
                     new_status=new_status,
+                    skip_reason="low_score" if not above_threshold else None,
                 )
 
             stats["scored"] += 1
@@ -178,4 +182,4 @@ class Scorer:
             else:
                 job = {**job, "description": sanitized["clean_text"]}
 
-        return self._client.score_job(job, self._cv_summary)
+        return self._client.score_job(job, self._cv_summary, self._user_preferences)
