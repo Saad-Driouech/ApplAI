@@ -44,12 +44,14 @@ class RemotiveScraper(BaseScraper):
         return results
 
     def _fetch_category(self, query: str, category: str) -> list[dict[str, Any]]:
+        # Remotive's search param doesn't support boolean OR queries and returns 0
+        # results for complex strings. The category filter is sufficient — the AI
+        # keyword pre-filter in the scorer handles relevance filtering downstream.
         try:
             resp = self._get(
                 _API_URL,
                 params={
                     "category": category,
-                    "search": query,
                     "limit": 50,
                 },
                 headers={"Accept": "application/json"},
