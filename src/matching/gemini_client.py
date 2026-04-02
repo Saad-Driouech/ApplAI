@@ -67,7 +67,7 @@ Strong demonstrated skills can compensate for fewer years.
 - Visa/work-authorization mismatches are a real blocker — penalize heavily.
 - "Preferred" or "nice to have" requirements should NOT lower the score significantly.
 - Return raw JSON, no markdown fences.
-"""
+{user_preferences}"""
 
 
 @dataclass
@@ -176,6 +176,7 @@ class GeminiClient:
         self,
         job: dict,
         cv_summary: str,
+        user_preferences: str = "",
     ) -> ScoreResult:
         """
         Score a job against the candidate's CV.
@@ -183,6 +184,7 @@ class GeminiClient:
         Args:
             job: dict with keys: title, company, country, description
             cv_summary: concise text summary of the candidate's profile
+            user_preferences: optional learned preference context to inject
 
         Returns:
             ScoreResult with score (0-10), reasoning, must_haves_met, gaps
@@ -193,6 +195,7 @@ class GeminiClient:
             company=job.get("company", ""),
             country=job.get("country", ""),
             description=(job.get("description") or "")[:3000],  # cap at 3k chars
+            user_preferences=user_preferences,
         )
 
         try:

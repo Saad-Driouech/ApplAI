@@ -65,13 +65,14 @@ class GroqClient:
             raise
         return response.choices[0].message.content
 
-    def score_job(self, job: dict, cv_summary: str) -> ScoreResult:
+    def score_job(self, job: dict, cv_summary: str, user_preferences: str = "") -> ScoreResult:
         prompt = _SCORE_PROMPT_TEMPLATE.format(
             cv_summary=cv_summary,
             title=job.get("title", ""),
             company=job.get("company", ""),
             country=job.get("country", ""),
             description=(job.get("description") or "")[:3000],
+            user_preferences=user_preferences,
         )
 
         try:

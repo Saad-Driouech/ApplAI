@@ -120,11 +120,18 @@ def phase_score(cfg) -> dict:
             rpm=cfg.gemini.requests_per_minute,
             rpd=cfg.gemini.requests_per_day,
         )
+    # Build preference context from past decisions (if enough data)
+    from src.feedback.preferences import build_preference_context
+    user_preferences = build_preference_context(cfg.paths.db_path)
+    if user_preferences:
+        log.info("Injecting learned preferences into scoring prompt (%d chars)", len(user_preferences))
+
     scorer = Scorer(
         db_path=cfg.paths.db_path,
         client=scoring_client,
         cv_summary=cv_summary,
         score_threshold=cfg.score_threshold,
+        user_preferences=user_preferences,
     )
     stats = scorer.run()
     log.info("Score phase complete: %s", stats)
