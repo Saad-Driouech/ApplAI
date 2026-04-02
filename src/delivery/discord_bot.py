@@ -180,6 +180,70 @@ class DiscordDelivery:
             return custom_id[len("reject_"):], "rejected"
         return None
 
+    def send_skipped_digest(self, jobs: list[dict]) -> str | None:
+        """
+        Send a compact digest of recently skipped jobs to Discord.
+        Each job gets a Rescue button to queue it for document generation.
+        Returns the message ID, or None if no jobs to send.
+        """
+        if not jobs:
+            return None
+
+        # Build fields — Discord embeds max 25 fields
+        fields = []
+        for job in jobs[:10]:
+            score = job.get("score", 0) or 0
+            reason = job.get("skip_reason", "low_score") or "low_score"
+            tag = "filtered" if reason == "keyword_filter" else f"score {score:.1f}"
+            url = job.get("source_url", "")
+            value = f"{job.get('company', '?')} | {tag}"
+            if url:
+                value = f"[{job.get('company', '?')}]({url}) | {tag}"
+            fields.append({
+                "name": job.get("title", "?")[:256],
+                "value": value,
+                "inline": False,
+            })
+
+        embed = {
+            "title": "Skipped Jobs Digest",
+            "description": f"{len(jobs)} recently skipped jobs. Rescue any that look relevant.",
+            "color": 0xFEE75C,  # yellow
+            "fields": fields,
+            "footer": {"text": "ApplAI Feedback Loop"},
+        }
+
+        # One rescue button per job (max 5 per action row, max 5 rows)
+        components = []
+        for i in range(0, min(len(jobs), 10), 5):
+            row = {
+                "type": 1,  # ACTION_ROW
+                "components": [
+                    {
+                        "type": 2,       # BUTTON
+                        "style": 2,      # SECONDARY (grey)
+                        "label": f"Rescue: {job.get('company', '?')[:30]}",
+                        "custom_id": f"rescue_{job['id']}",
+                    }
+                    for job in jobs[i:i + 5]
+                ],
+            }
+            components.append(row)
+
+        payload = {"embeds": [embed], "components": components}
+
+        resp = self._http.post(
+            f"{self._base_url}/channels/{self._channel_id}/messages",
+            headers={**self._headers, "Content-Type": "application/json"},
+            content=json.dumps(payload),
+        )
+        resp.raise_for_status()
+        msg_id = str(resp.json()["id"])
+
+        audit("skipped_digest_sent", job_count=len(jobs), discord_msg_id=msg_id)
+        log.info("Skipped digest sent to Discord | %d jobs | msg_id=%s", len(jobs), msg_id)
+        return msg_id
+
     def close(self) -> None:
         self._http.close()
 

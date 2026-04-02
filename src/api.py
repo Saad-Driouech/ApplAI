@@ -56,6 +56,38 @@ def stats():
     return {"jobs": {row["status"]: row["count"] for row in rows}}
 
 
+@app.get("/feedback")
+def feedback():
+    """Analyze approval/rejection history, recommend threshold adjustments, and suggest keywords."""
+    from src.feedback.analyzer import analyze
+    from src.feedback.preferences import build_preference_context, suggest_keyword_additions
+    cfg = _get_cfg()
+    report = analyze(cfg.paths.db_path, current_threshold=cfg.score_threshold)
+    preferences = build_preference_context(cfg.paths.db_path)
+    keyword_suggestions = suggest_keyword_additions(cfg.paths.db_path)
+    return {
+        "total_decisions": report.total_decisions,
+        "overall_approval_rate": round(report.overall_approval_rate, 2),
+        "approved": report.total_approved,
+        "rejected": report.total_rejected,
+        "current_threshold": report.current_threshold,
+        "recommended_threshold": report.recommended_threshold,
+        "recommendation": report.recommendation_reason,
+        "bands": [
+            {
+                "range": b.label,
+                "total": b.total,
+                "approved": b.approved,
+                "rejected": b.rejected,
+                "approval_rate": round(b.approval_rate, 2),
+            }
+            for b in report.bands
+        ],
+        "learned_preferences": preferences or "Not enough decisions yet",
+        "keyword_suggestions": keyword_suggestions,
+    }
+
+
 @app.post("/scrape")
 def scrape():
     cfg = _get_cfg()
@@ -94,6 +126,31 @@ def deliver():
         return {"delivered": delivered}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/digest")
+def digest():
+    """Send a digest of recently skipped jobs to Discord for review."""
+    cfg = _get_cfg()
+    from src.delivery.discord_bot import DiscordDelivery
+
+    with db.get_conn(cfg.paths.db_path) as conn:
+        rows = db.get_recent_skipped(conn, days=7, limit=20)
+
+    jobs = [dict(r) for r in rows]
+    if not jobs:
+        return {"sent": 0, "message": "No recently skipped jobs to review"}
+
+    discord = DiscordDelivery(
+        bot_token=cfg.discord.bot_token,
+        channel_id=cfg.discord.channel_id,
+    )
+    try:
+        discord.send_skipped_digest(jobs)
+    finally:
+        discord.close()
+
+    return {"sent": len(jobs)}
 
 
 @app.post("/discord/interactions")
@@ -140,6 +197,10 @@ async def discord_interactions(
             app_id, decision = custom_id[len("approve_"):], "approved"
         elif custom_id.startswith("reject_"):
             app_id, decision = custom_id[len("reject_"):], "rejected"
+        elif custom_id.startswith("rescue_"):
+            job_id = custom_id[len("rescue_"):]
+            background_tasks.add_task(_process_rescue, job_id, msg_id)
+            return {"type": 6}
         else:
             return Response(content="Unknown interaction", status_code=400)
 
@@ -163,6 +224,53 @@ def _verify_discord_signature(
         return True
     except Exception:
         return False
+
+
+def _process_rescue(job_id: str, msg_id: str) -> None:
+    """Background task: rescue a skipped job by changing its status to 'queued'."""
+    cfg = _get_cfg()
+
+    with db.get_conn(cfg.paths.db_path) as conn:
+        row = conn.execute(
+            "SELECT id, title, company, status FROM jobs WHERE id = ?", (job_id,)
+        ).fetchone()
+
+    if not row:
+        log.warning("Rescue received for unknown job_id=%s", job_id)
+        return
+
+    if row["status"] != "skipped":
+        log.info("Job %s already has status '%s', skipping rescue", job_id, row["status"])
+        return
+
+    with db.get_conn(cfg.paths.db_path) as conn:
+        db.update_status(conn, job_id, "queued")
+        db.record_feedback_event(conn, job_id, "rescue")
+
+    # Update Discord message to confirm rescue
+    from src.delivery.discord_bot import DiscordDelivery
+    discord = DiscordDelivery(
+        bot_token=cfg.discord.bot_token,
+        channel_id=cfg.discord.channel_id,
+    )
+    try:
+        discord._http.patch(
+            f"{discord._base_url}/channels/{discord._channel_id}/messages/{msg_id}",
+            headers={**discord._headers, "Content-Type": "application/json"},
+            content=json.dumps({
+                "embeds": [{
+                    "title": "Job Rescued",
+                    "description": f"**{row['title']}** @ {row['company']} has been queued for document generation.",
+                    "color": 0x57F287,  # green
+                }],
+                "components": [],
+            }),
+        )
+    finally:
+        discord.close()
+
+    audit("job_rescued", job_id=job_id, title=row["title"], company=row["company"])
+    log.info("Job rescued: %s — %s @ %s", job_id, row["title"], row["company"])
 
 
 def _process_decision(app_id: str, decision: str, msg_id: str) -> None:
