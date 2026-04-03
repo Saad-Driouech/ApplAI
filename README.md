@@ -216,7 +216,3 @@ See [SECURITY.md](SECURITY.md) for the full threat model and mitigation details.
 | n8n (orchestration) | Free (self-hosted) |
 | Discord + Notion | Free |
 | **Total** | **~$0–15/month** depending on volume |
-
-## License
-
-MIT
