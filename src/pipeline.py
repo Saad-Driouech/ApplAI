@@ -105,7 +105,13 @@ def phase_score(cfg) -> dict:
             "Create profile_summary.md in your working directory for accurate scoring."
         )
 
-    if cfg.tier1_provider == "groq":
+    if cfg.tier1_provider == "ollama":
+        from src.matching.ollama_client import OllamaClient
+        scoring_client = OllamaClient(
+            endpoint=cfg.ollama.endpoint,
+            model=cfg.ollama.model,
+        )
+    elif cfg.tier1_provider == "groq":
         from src.matching.groq_client import GroqClient
         scoring_client = GroqClient(
             api_key=cfg.groq.api_key,
@@ -126,12 +132,23 @@ def phase_score(cfg) -> dict:
     if user_preferences:
         log.info("Injecting learned preferences into scoring prompt (%d chars)", len(user_preferences))
 
+    # Ollama fallback: if enabled and not already the primary, create a fallback client
+    fallback_client = None
+    if cfg.ollama.enabled and cfg.tier1_provider != "ollama":
+        from src.matching.ollama_client import OllamaClient
+        fallback_client = OllamaClient(
+            endpoint=cfg.ollama.endpoint,
+            model=cfg.ollama.model,
+        )
+        log.info("Ollama fallback enabled (%s)", cfg.ollama.model)
+
     scorer = Scorer(
         db_path=cfg.paths.db_path,
         client=scoring_client,
         cv_summary=cv_summary,
         score_threshold=cfg.score_threshold,
         user_preferences=user_preferences,
+        fallback_client=fallback_client,
     )
     stats = scorer.run()
     log.info("Score phase complete: %s", stats)

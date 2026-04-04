@@ -83,6 +83,7 @@ class Scorer:
         score_threshold: float = 6.0,
         batch_size: int = 50,
         user_preferences: str = "",
+        fallback_client=None,
     ):
         self._db_path = db_path
         self._client = client
@@ -90,6 +91,7 @@ class Scorer:
         self._threshold = score_threshold
         self._batch_size = batch_size
         self._user_preferences = user_preferences
+        self._fallback_client = fallback_client
 
     def run(self) -> dict[str, int]:
         """
@@ -128,9 +130,22 @@ class Scorer:
             try:
                 result = self._score_one(job)
             except BudgetExceeded as exc:
-                log.warning("Gemini quota hit during scoring: %s", exc)
-                stats["quota_hit"] += 1
-                break
+                if self._fallback_client:
+                    log.warning("Quota hit, switching to Ollama fallback: %s", exc)
+                    self._client = self._fallback_client
+                    self._fallback_client = None  # only switch once
+                    stats["quota_hit"] += 1
+                    # Retry this job with the fallback client
+                    try:
+                        result = self._score_one(job)
+                    except Exception as fallback_exc:
+                        log.error("Fallback scoring failed for job %s: %s", job_id, fallback_exc)
+                        stats["errors"] += 1
+                        continue
+                else:
+                    log.warning("Quota hit, no fallback available: %s", exc)
+                    stats["quota_hit"] += 1
+                    break
             except Exception as exc:
                 log.error("Scoring error for job %s: %s", job_id, exc, exc_info=True)
                 stats["errors"] += 1
