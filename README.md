@@ -18,7 +18,7 @@ Scrapes job boards, scores relevance with LLMs, generates tailored CVs and cover
 
 ## Features
 
-- **Multi-source scraping** — Arbeitnow (Germany-focused), Remotive (global remote), with extensible scraper base class
+- **Multi-source scraping** — Arbeitnow (Germany), Remotive (global remote), RemoteOK (global remote), Adzuna (DE/AE/NL/CH, optional API key), with extensible scraper base class
 - **LLM-powered scoring** — Gemini 2.5 Flash (free tier) or Groq as Tier 1 scorer; configurable threshold (default 6.0/10)
 - **AI keyword pre-filter** — Jobs without AI/ML keywords in title or description are auto-skipped before LLM scoring, saving API quota
 - **Document generation** — Anthropic API tailors a LaTeX CV and a LaTeX cover letter, both compiled to PDF
@@ -109,6 +109,8 @@ All configuration is via environment variables in `config/.env`. See [`config/.e
 | `CANDIDATE_PHONE` | Your phone number | — |
 | `CANDIDATE_ADDRESS` | Your address line | — |
 | `CANDIDATE_CITY` | City you're writing from | — |
+| `ADZUNA_APP_ID` | Adzuna API app ID (optional) | — |
+| `ADZUNA_APP_KEY` | Adzuna API app key (optional) | — |
 
 ## API Endpoints
 
@@ -143,7 +145,9 @@ applai/
 │   ├── scrapers/
 │   │   ├── base.py             # Abstract base with retry + dedup
 │   │   ├── arbeitnow.py        # Germany tech jobs
-│   │   └── remotive.py         # Global remote jobs
+│   │   ├── remotive.py         # Global remote jobs (free API)
+│   │   ├── remoteok.py         # Global remote jobs (free public API)
+│   │   └── adzuna.py           # DE/AE/NL/CH jobs (free API key required)
 │   ├── matching/
 │   │   ├── scorer.py           # Scoring orchestrator + keyword pre-filter
 │   │   ├── gemini_client.py    # Google Gemini integration
@@ -192,7 +196,7 @@ See [SECURITY.md](SECURITY.md) for the full threat model and mitigation details.
 
 ## Current Progress
 
-- [x] Job scraping (Arbeitnow, Remotive)
+- [x] Job scraping (Arbeitnow, Remotive, RemoteOK, Adzuna)
 - [x] LLM scoring (Gemini Flash, Groq)
 - [x] CV generation (LaTeX → PDF via Anthropic API)
 - [x] Cover letter generation (LaTeX → PDF via Anthropic API)
@@ -204,8 +208,8 @@ See [SECURITY.md](SECURITY.md) for the full threat model and mitigation details.
 - [x] AI keyword pre-filter (saves LLM quota)
 - [x] Feedback loop (preference learning, threshold recommendations)
 - [x] Skipped jobs digest with rescue flow
-- [ ] Ollama fallback for offline/free LLM scoring
-- [ ] Additional scraper sources
+- [x] Ollama fallback for offline/free LLM scoring
+- [x] Additional scraper sources (RemoteOK, Adzuna)
 
 ## Cost
 

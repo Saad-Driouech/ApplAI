@@ -35,28 +35,31 @@ log = get_logger(__name__)
 
 def _build_scrapers(cfg, db_path: Path) -> list:
     from src.scrapers.arbeitnow import ArbeitnowScraper
-    from src.scrapers.linkedin_rss import LinkedInRssScraper
     from src.scrapers.remotive import RemotiveScraper
-    # Legacy scrapers (currently blocked by anti-bot — kept for future fixes)
-    from src.scrapers.rss import IndeedRssScraper, StepStoneRssScraper, BaytRssScraper
+    from src.scrapers.remoteok import RemoteOKScraper
 
     scrapers = []
 
     # ── Active scrapers ───────────────────────────────────────────────────
     # Arbeitnow: Germany tech jobs, free API
     scrapers.append(ArbeitnowScraper(db_path))
-    # Remotive: remote ML/AI roles globally
+    # Remotive: remote ML/AI roles globally, free API
     scrapers.append(RemotiveScraper(db_path))
+    # RemoteOK: remote tech jobs globally, free public JSON API
+    scrapers.append(RemoteOKScraper(db_path))
+
+    # Adzuna: broad coverage across DE/AE/NL/CH, free API key required
+    if cfg.adzuna.enabled:
+        from src.scrapers.adzuna import AdzunaScraper
+        scrapers.append(AdzunaScraper(db_path, app_id=cfg.adzuna.app_id, app_key=cfg.adzuna.app_key))
+        log.info("Adzuna scraper enabled")
+    else:
+        log.debug("Adzuna scraper disabled (ADZUNA_APP_ID / ADZUNA_APP_KEY not set)")
 
     # ── Legacy scrapers (blocked/dead — enable once fixed) ────────────────
-    # scrapers.append(LinkedInRssScraper(db_path, country="DE"))  # RSS feed dead (404)
-    # scrapers.append(LinkedInRssScraper(db_path, country="AE"))
-    # scrapers.append(LinkedInRssScraper(db_path, country="SA"))
     # scrapers.append(IndeedRssScraper(db_path, country="DE"))    # 403 anti-bot
-    # scrapers.append(IndeedRssScraper(db_path, country="AE"))
     # scrapers.append(StepStoneRssScraper(db_path, country="DE")) # 404
     # scrapers.append(BaytRssScraper(db_path, country="SA"))      # 403 anti-bot
-    # scrapers.append(BaytRssScraper(db_path, country="AE"))
 
     return scrapers
 

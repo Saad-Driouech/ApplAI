@@ -74,6 +74,16 @@ class OllamaConfig:
 
 
 @dataclass(frozen=True)
+class AdzunaConfig:
+    app_id: str = ""
+    app_key: str = ""
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.app_id and self.app_key)
+
+
+@dataclass(frozen=True)
 class PathConfig:
     working_dir: Path          # host-side job applications folder
     db_path: Path              # SQLite database
@@ -89,6 +99,7 @@ class AppConfig:
     notion: NotionConfig
     anthropic: AnthropicConfig
     ollama: OllamaConfig
+    adzuna: AdzunaConfig
     paths: PathConfig
     tier1_provider: str        # "gemini" | "groq" | "ollama"
     allowed_countries: frozenset = field(
@@ -158,6 +169,11 @@ def load() -> AppConfig:
         requests_per_day=int(_optional("GROQ_RPD", "14400")),
     )
 
+    adzuna = AdzunaConfig(
+        app_id=_optional("ADZUNA_APP_ID", ""),
+        app_key=_optional("ADZUNA_APP_KEY", ""),
+    )
+
     tier1_provider = _optional("LLM_TIER1_PROVIDER", "gemini").lower()
     if tier1_provider not in {"gemini", "groq", "ollama"}:
         raise EnvironmentError(
@@ -176,6 +192,7 @@ def load() -> AppConfig:
         notion=notion,
         anthropic=anthropic,
         ollama=ollama,
+        adzuna=adzuna,
         paths=paths,
         tier1_provider=tier1_provider,
         score_threshold=float(_optional("SCORE_THRESHOLD", "6.0")),
