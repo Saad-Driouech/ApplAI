@@ -10,6 +10,7 @@ All queries use parameterised statements (no f-strings in SQL).
 """
 from __future__ import annotations
 
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -21,7 +22,7 @@ from src.logger import get_logger
 log = get_logger(__name__)
 
 # Bump this when the schema changes.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _DDL = """
 PRAGMA journal_mode=WAL;
@@ -50,6 +51,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     score_reasoning TEXT,
     status          TEXT NOT NULL DEFAULT 'new',
                     -- new | scored | queued | generating | ready | submitted | rejected | skipped
+    dedup_key       TEXT,                      -- normalized company+title for cross-source dedup
     UNIQUE(source, external_id)
 );
 
@@ -102,11 +104,41 @@ _MIGRATIONS = {
     2: [
         "ALTER TABLE jobs ADD COLUMN skip_reason TEXT",
     ],
+    3: [
+        "ALTER TABLE jobs ADD COLUMN dedup_key TEXT",
+        "CREATE INDEX IF NOT EXISTS idx_jobs_dedup ON jobs(dedup_key)",
+    ],
 }
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _compute_dedup_key(company: str, title: str) -> str:
+    """
+    Normalized key for cross-source duplicate detection.
+
+    Lowercases, removes gender suffixes (m/f/d etc.), strips punctuation,
+    and collapses whitespace so that the same role posted on two boards
+    maps to the same key.
+    """
+    def _norm(s: str) -> str:
+        s = s.lower().strip()
+        # Remove European gender suffixes: (m/f/d), (w/m/d), [all genders], etc.
+        s = re.sub(
+            r'\s*[\(\[]\s*(?:m/f/d|f/m/d|m/w/d|w/m/d|f/m/x|all genders?|diverse)\s*[\)\]]\s*',
+            '',
+            s,
+            flags=re.IGNORECASE,
+        )
+        # Replace punctuation with spaces
+        s = re.sub(r'[^\w\s]', ' ', s)
+        # Collapse whitespace
+        s = re.sub(r'\s+', ' ', s).strip()
+        return s
+
+    return f"{_norm(company)}|{_norm(title)}"
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
@@ -162,7 +194,24 @@ def init_db(db_path: Path) -> sqlite3.Connection:
         conn.commit()
         log.info("Database initialised at schema version %d", SCHEMA_VERSION)
 
+    # Backfill dedup_key for any rows that predate the column
+    _backfill_dedup_keys(conn)
+
     return conn
+
+
+def _backfill_dedup_keys(conn: sqlite3.Connection) -> None:
+    """Populate dedup_key for existing rows that have NULL."""
+    rows = conn.execute(
+        "SELECT id, company, title FROM jobs WHERE dedup_key IS NULL"
+    ).fetchall()
+    if not rows:
+        return
+    for row in rows:
+        key = _compute_dedup_key(row["company"] or "", row["title"] or "")
+        conn.execute("UPDATE jobs SET dedup_key = ? WHERE id = ?", (key, row["id"]))
+    conn.commit()
+    log.info("Backfilled dedup_key for %d existing job records", len(rows))
 
 
 @contextmanager
@@ -184,18 +233,14 @@ def get_conn(db_path: Path) -> Generator[sqlite3.Connection, None, None]:
 
 def upsert_job(conn: sqlite3.Connection, job: dict[str, Any]) -> bool:
     """
-    Insert a new job record.  Returns True if inserted, False if it already existed.
+    Insert a new job record.  Returns True if inserted as a new unique job,
+    False if it already existed (same source) or is a cross-source duplicate.
+
+    Cross-source deduplication: if a job with the same normalized company+title
+    already exists from any other source, this record is inserted as
+    status='skipped' / skip_reason='duplicate' so it is never scored again.
 
     The caller must have sanitized `job` through sanitize.sanitize_job() first.
-    """
-    sql = """
-        INSERT INTO jobs
-            (id, external_id, source, title, company, city, country,
-             salary_info, source_url, description, posted_at, scraped_at, status)
-        VALUES
-            (:id, :external_id, :source, :title, :company, :city, :country,
-             :salary_info, :source_url, :description, :posted_at, :scraped_at, 'new')
-        ON CONFLICT(source, external_id) DO NOTHING
     """
     job.setdefault("scraped_at", _now())
     job.setdefault("posted_at", None)
@@ -203,7 +248,59 @@ def upsert_job(conn: sqlite3.Connection, job: dict[str, Any]) -> bool:
     job.setdefault("description", None)
     job.setdefault("city", None)
 
-    cursor = conn.execute(sql, job)
+    dedup_key = _compute_dedup_key(job.get("company", ""), job.get("title", ""))
+    job["dedup_key"] = dedup_key
+
+    # Check for a cross-source duplicate: same company+title, different record,
+    # not itself a duplicate (to avoid chaining).
+    existing = conn.execute(
+        """
+        SELECT id FROM jobs
+        WHERE dedup_key = ?
+          AND id != ?
+          AND (skip_reason IS NULL OR skip_reason != 'duplicate')
+        LIMIT 1
+        """,
+        (dedup_key, job["id"]),
+    ).fetchone()
+
+    if existing:
+        # Insert as a skipped duplicate so the audit trail is preserved
+        cursor = conn.execute(
+            """
+            INSERT INTO jobs
+                (id, external_id, source, title, company, city, country,
+                 salary_info, source_url, description, posted_at, scraped_at,
+                 status, skip_reason, dedup_key)
+            VALUES
+                (:id, :external_id, :source, :title, :company, :city, :country,
+                 :salary_info, :source_url, :description, :posted_at, :scraped_at,
+                 'skipped', 'duplicate', :dedup_key)
+            ON CONFLICT(source, external_id) DO NOTHING
+            """,
+            job,
+        )
+        if cursor.rowcount > 0:
+            log.debug(
+                "Cross-source duplicate skipped: %s @ %s (matches job %s)",
+                job.get("title"), job.get("company"), existing["id"],
+            )
+        return False
+
+    cursor = conn.execute(
+        """
+        INSERT INTO jobs
+            (id, external_id, source, title, company, city, country,
+             salary_info, source_url, description, posted_at, scraped_at,
+             status, dedup_key)
+        VALUES
+            (:id, :external_id, :source, :title, :company, :city, :country,
+             :salary_info, :source_url, :description, :posted_at, :scraped_at,
+             'new', :dedup_key)
+        ON CONFLICT(source, external_id) DO NOTHING
+        """,
+        job,
+    )
     return cursor.rowcount > 0
 
 
