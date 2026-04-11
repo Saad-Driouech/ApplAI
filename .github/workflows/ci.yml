@@ -9,9 +9,6 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: applai
 
     steps:
       - uses: actions/checkout@v4
@@ -20,10 +17,9 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: applai/requirements.txt
 
       - name: Install dependencies
         run: pip install -r requirements.txt
 
       - name: Run tests
-        run: pytest tests/ -v --tb=short
+        run: PYTHONPATH=. pytest tests/ -v --tb=short
