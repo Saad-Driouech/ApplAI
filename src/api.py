@@ -16,8 +16,10 @@ import binascii
 import json
 import os
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request, Response
+from fastapi.responses import HTMLResponse
 
 import src.logger as logger_module
 from src.config import get as get_config
@@ -39,6 +41,13 @@ def _get_cfg():
         logger_module.setup(logs_dir=_cfg.paths.logs_dir, debug=_cfg.debug)
         db.init_db(_cfg.paths.db_path)
     return _cfg
+
+
+@app.get("/", response_class=HTMLResponse, include_in_schema=False)
+def dashboard():
+    """Serve the web dashboard."""
+    html_path = Path(__file__).parent / "static" / "index.html"
+    return html_path.read_text(encoding="utf-8")
 
 
 @app.get("/health")
@@ -86,6 +95,20 @@ def feedback():
         "learned_preferences": preferences or "Not enough decisions yet",
         "keyword_suggestions": keyword_suggestions,
     }
+
+
+@app.get("/scrape-runs")
+def scrape_runs():
+    """Return the last 30 scrape runs for the dashboard."""
+    cfg = _get_cfg()
+    with db.get_conn(cfg.paths.db_path) as conn:
+        rows = conn.execute("""
+            SELECT source, started_at, finished_at, jobs_found, jobs_new, error
+            FROM scrape_runs
+            ORDER BY started_at DESC
+            LIMIT 30
+        """).fetchall()
+    return {"runs": [dict(r) for r in rows]}
 
 
 @app.post("/scrape")

@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ApplAI Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background: #0f1117; color: #e2e8f0; font-family: 'Inter', system-ui, sans-serif; }
+    .card { background: #1a1d27; border: 1px solid #2d3148; border-radius: 12px; }
+    .stat-card { background: #1a1d27; border: 1px solid #2d3148; border-radius: 10px; padding: 16px 20px; }
+    .btn { border-radius: 8px; padding: 8px 18px; font-size: 14px; font-weight: 500; cursor: pointer; transition: opacity 0.15s, transform 0.1s; display: inline-flex; align-items: center; gap: 6px; }
+    .btn:hover { opacity: 0.85; }
+    .btn:active { transform: scale(0.97); }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-blue   { background: #3b5bdb; color: #fff; }
+    .btn-violet { background: #7048e8; color: #fff; }
+    .btn-orange { background: #e67700; color: #fff; }
+    .btn-green  { background: #2f9e44; color: #fff; }
+    .btn-gray   { background: #2d3148; color: #a0aec0; }
+    .spinner { display: none; width: 14px; height: 14px; border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff; border-radius: 50%; animation: spin 0.7s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .tag { display: inline-block; background: #2d3148; color: #a0aec0; border-radius: 6px; padding: 2px 8px; font-size: 12px; margin: 2px; }
+    .run-row { border-bottom: 1px solid #2d3148; }
+    .run-row:last-child { border-bottom: none; }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+    ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-track { background: #1a1d27; } ::-webkit-scrollbar-thumb { background: #2d3148; border-radius: 3px; }
+  </style>
+</head>
+<body class="min-h-screen p-6">
+
+  <!-- Header -->
+  <div class="flex items-center justify-between mb-6">
+    <div>
+      <h1 class="text-2xl font-bold text-white">ApplAI</h1>
+      <p class="text-sm text-slate-400 mt-0.5">Job application pipeline dashboard</p>
+    </div>
+    <div class="flex items-center gap-3">
+      <span id="last-refresh" class="text-xs text-slate-500"></span>
+      <span id="health-dot" class="status-dot bg-slate-600" title="API status"></span>
+    </div>
+  </div>
+
+  <!-- Stat Cards -->
+  <div id="stats-grid" class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3 mb-6">
+    <!-- populated by JS -->
+  </div>
+
+  <!-- Pipeline Controls -->
+  <div class="card p-5 mb-6">
+    <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-4">Pipeline</h2>
+    <div class="flex flex-wrap gap-3">
+      <button class="btn btn-blue"   onclick="runPhase('scrape',   this)"><span class="spinner" id="sp-scrape"></span>Scrape</button>
+      <button class="btn btn-violet" onclick="runPhase('score',    this)"><span class="spinner" id="sp-score"></span>Score</button>
+      <button class="btn btn-orange" onclick="runPhase('generate', this)"><span class="spinner" id="sp-generate"></span>Generate</button>
+      <button class="btn btn-green"  onclick="runPhase('deliver',  this)"><span class="spinner" id="sp-deliver"></span>Deliver</button>
+      <button class="btn btn-gray"   onclick="runPhase('digest',   this)"><span class="spinner" id="sp-digest"></span>Digest</button>
+    </div>
+    <div id="phase-result" class="mt-3 text-sm text-slate-400 hidden"></div>
+  </div>
+
+  <!-- Bottom grid -->
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+    <!-- Scrape Runs -->
+    <div class="card p-5">
+      <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-4">Recent Scrape Runs</h2>
+      <div id="scrape-runs" class="text-sm">
+        <p class="text-slate-500">Loading…</p>
+      </div>
+    </div>
+
+    <!-- Feedback -->
+    <div class="card p-5">
+      <h2 class="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-4">Feedback & Preferences</h2>
+      <div id="feedback-panel" class="text-sm">
+        <p class="text-slate-500">Loading…</p>
+      </div>
+    </div>
+
+  </div>
+
+<script>
+const STATUS_META = {
+  new:        { label: 'New',        color: '#3b5bdb', bg: '#1e2a5e' },
+  queued:     { label: 'Queued',     color: '#e67700', bg: '#4a2800' },
+  generating: { label: 'Generating', color: '#ae3ec9', bg: '#3b1350' },
+  ready:      { label: 'Ready',      color: '#f59f00', bg: '#4a3300' },
+  submitted:  { label: 'Submitted',  color: '#2f9e44', bg: '#143320' },
+  approved:   { label: 'Approved',   color: '#2f9e44', bg: '#143320' },
+  rejected:   { label: 'Rejected',   color: '#e03131', bg: '#3b1212' },
+  skipped:    { label: 'Skipped',    color: '#495057', bg: '#1e2128' },
+  duplicate:  { label: 'Duplicate',  color: '#364fc7', bg: '#1a2050' },
+};
+
+const ORDER = ['new','queued','generating','ready','submitted','approved','rejected','skipped','duplicate'];
+
+async function fetchStats() {
+  try {
+    const r = await fetch('/stats');
+    const data = await r.json();
+    renderStats(data.jobs || {});
+    document.getElementById('health-dot').className = 'status-dot bg-green-500';
+  } catch {
+    document.getElementById('health-dot').className = 'status-dot bg-red-500';
+  }
+}
+
+function renderStats(jobs) {
+  const grid = document.getElementById('stats-grid');
+  const sorted = ORDER.filter(s => jobs[s] !== undefined)
+    .concat(Object.keys(jobs).filter(s => !ORDER.includes(s)));
+
+  grid.innerHTML = sorted.map(status => {
+    const meta = STATUS_META[status] || { label: status, color: '#718096', bg: '#1a1d27' };
+    const count = jobs[status] ?? 0;
+    return `
+      <div class="stat-card" style="border-color: ${meta.color}33">
+        <div class="text-2xl font-bold" style="color: ${meta.color}">${count}</div>
+        <div class="text-xs text-slate-400 mt-1">${meta.label}</div>
+      </div>`;
+  }).join('');
+}
+
+async function fetchScrapeRuns() {
+  try {
+    const r = await fetch('/scrape-runs');
+    const data = await r.json();
+    renderScrapeRuns(data.runs || []);
+  } catch {
+    document.getElementById('scrape-runs').innerHTML = '<p class="text-red-400">Failed to load.</p>';
+  }
+}
+
+function renderScrapeRuns(runs) {
+  if (!runs.length) {
+    document.getElementById('scrape-runs').innerHTML = '<p class="text-slate-500">No scrape runs yet.</p>';
+    return;
+  }
+
+  // Group by source, show latest run per source + total today
+  const bySource = {};
+  runs.forEach(r => {
+    if (!bySource[r.source]) bySource[r.source] = [];
+    bySource[r.source].push(r);
+  });
+
+  const rows = Object.entries(bySource).map(([source, items]) => {
+    const latest = items[0];
+    const totalNew = items.reduce((s, r) => s + (r.jobs_new || 0), 0);
+    const ago = timeAgo(latest.started_at);
+    const hasError = latest.error && latest.error !== 'none';
+    return `
+      <div class="run-row py-2.5 flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <span class="status-dot ${hasError ? 'bg-red-500' : 'bg-green-500'}"></span>
+          <span class="font-medium text-slate-200">${source}</span>
+          <span class="text-slate-500 text-xs">${ago}</span>
+        </div>
+        <div class="flex items-center gap-3 text-xs">
+          <span class="text-slate-400">${latest.jobs_found ?? 0} found</span>
+          <span class="font-semibold" style="color: ${totalNew > 0 ? '#2f9e44' : '#495057'}">+${totalNew} new</span>
+        </div>
+      </div>`;
+  });
+
+  document.getElementById('scrape-runs').innerHTML = rows.join('');
+}
+
+async function fetchFeedback() {
+  try {
+    const r = await fetch('/feedback');
+    const data = await r.json();
+    renderFeedback(data);
+  } catch {
+    document.getElementById('feedback-panel').innerHTML = '<p class="text-red-400">Failed to load.</p>';
+  }
+}
+
+function renderFeedback(data) {
+  const approvalPct = Math.round((data.overall_approval_rate || 0) * 100);
+  const thresholdColor = data.recommended_threshold > data.current_threshold ? '#f59f00' : '#2f9e44';
+
+  const keywords = (data.keyword_suggestions || []).length
+    ? data.keyword_suggestions.map(k => `<span class="tag">${k}</span>`).join('')
+    : '<span class="text-slate-500">None yet — rescue some skipped jobs first.</span>';
+
+  const prefs = typeof data.learned_preferences === 'string' && data.learned_preferences !== 'Not enough decisions yet'
+    ? `<pre class="text-xs text-slate-300 whitespace-pre-wrap bg-slate-800 rounded-lg p-3 mt-2">${data.learned_preferences}</pre>`
+    : '<p class="text-slate-500 text-xs mt-1">Not enough decisions yet (need 5+).</p>';
+
+  document.getElementById('feedback-panel').innerHTML = `
+    <div class="grid grid-cols-3 gap-3 mb-4">
+      <div class="stat-card text-center" style="border-color: #2f9e4433">
+        <div class="text-xl font-bold text-green-400">${data.approved ?? 0}</div>
+        <div class="text-xs text-slate-400 mt-1">Approved</div>
+      </div>
+      <div class="stat-card text-center" style="border-color: #e0313133">
+        <div class="text-xl font-bold text-red-400">${data.rejected ?? 0}</div>
+        <div class="text-xs text-slate-400 mt-1">Rejected</div>
+      </div>
+      <div class="stat-card text-center" style="border-color: #3b5bdb33">
+        <div class="text-xl font-bold text-blue-400">${approvalPct}%</div>
+        <div class="text-xs text-slate-400 mt-1">Approval</div>
+      </div>
+    </div>
+
+    <div class="flex items-center justify-between mb-4 text-xs">
+      <span class="text-slate-400">Score threshold</span>
+      <span>
+        <span class="text-slate-200 font-semibold">${data.current_threshold}</span>
+        ${data.recommended_threshold !== data.current_threshold
+          ? `<span class="ml-2" style="color:${thresholdColor}">→ ${data.recommended_threshold} recommended</span>`
+          : '<span class="ml-2 text-green-400">✓ optimal</span>'}
+      </span>
+    </div>
+
+    <div class="mb-4">
+      <div class="text-xs text-slate-400 mb-2">Learned preferences</div>
+      ${prefs}
+    </div>
+
+    <div>
+      <div class="text-xs text-slate-400 mb-2">Keyword filter suggestions</div>
+      <div>${keywords}</div>
+    </div>`;
+}
+
+async function runPhase(phase, btn) {
+  const endpoint = phase === 'digest' ? '/digest' : `/${phase}`;
+  const spinner = document.getElementById(`sp-${phase}`);
+  const result = document.getElementById('phase-result');
+
+  btn.disabled = true;
+  spinner.style.display = 'block';
+  result.classList.add('hidden');
+
+  try {
+    const r = await fetch(endpoint, { method: 'POST' });
+    const data = await r.json();
+    result.textContent = `${phase}: ${JSON.stringify(data)}`;
+    result.className = 'mt-3 text-sm text-green-400';
+    result.classList.remove('hidden');
+    await refresh();
+  } catch (e) {
+    result.textContent = `Error: ${e.message}`;
+    result.className = 'mt-3 text-sm text-red-400';
+    result.classList.remove('hidden');
+  } finally {
+    btn.disabled = false;
+    spinner.style.display = 'none';
+  }
+}
+
+function timeAgo(iso) {
+  if (!iso) return '';
+  const diff = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (diff < 60) return `${Math.round(diff)}s ago`;
+  if (diff < 3600) return `${Math.round(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.round(diff / 3600)}h ago`;
+  return `${Math.round(diff / 86400)}d ago`;
+}
+
+async function refresh() {
+  await Promise.all([fetchStats(), fetchScrapeRuns(), fetchFeedback()]);
+  document.getElementById('last-refresh').textContent = 'Updated ' + new Date().toLocaleTimeString();
+}
+
+// Initial load + auto-refresh every 60s
+refresh();
+setInterval(refresh, 60_000);
+</script>
+</body>
+</html>
