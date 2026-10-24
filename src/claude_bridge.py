@@ -34,9 +34,14 @@ def validate_input(data: dict) -> dict:
         elif not data.get(field):
             data[field] = ""
 
-    jd = data.get("description", "")
-    if len(jd) > MAX_JD_LENGTH:
-        data["description"] = jd[:MAX_JD_LENGTH] + "\n[TRUNCATED]"
+    # The JD is untrusted input headed for an LLM whose output becomes LaTeX —
+    # strip prompt injection / hidden text here, not only before scoring.
+    jd = data.get("description") or ""
+    if jd:
+        from src.utils.jd_sanitizer import sanitize_jd
+        sanitized = sanitize_jd(jd)  # also truncates to MAX_JD_LENGTH
+        jd = "" if sanitized["blocked"] else sanitized["clean_text"]
+    data["description"] = jd
 
     company = data["company"]
     safe_company = "".join(c for c in company if c.isalnum() or c in " -.").strip()

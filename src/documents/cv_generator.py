@@ -5,20 +5,19 @@ then compiles it to PDF via pdflatex.
 Pipeline per job:
   1. Read base .tex template and profile_summary.md from disk (dynamic — always latest)
   2. Call Anthropic API: system = rules + profile + CV template, user = job details
-  3. Validate output via latex_safety.validate_tex_file()
-  4. Compile with pdflatex (--no-shell-escape)
-  5. Return path to the generated PDF
+  3. Validate + compile in a sandbox via latex_safety.compile_tex()
+  4. Return path to the generated PDF
 """
 from __future__ import annotations
 
 import re
 import shutil
-import subprocess
 import uuid
 from pathlib import Path
 from typing import Optional
 
 from src.logger import audit, get_logger
+from src.utils.latex_safety import LatexCompileError, UnsafeLatexError, compile_tex
 
 log = get_logger(__name__)
 
@@ -108,18 +107,15 @@ class CVGenerator:
         tex_source = self._tailor_with_api(job, gemini_reasoning)
         tex_path = job_folder / "cv.tex"
         tex_path.write_text(tex_source, encoding="utf-8")
+        self._copy_template_assets(job_folder)
 
-        from src.utils.latex_safety import validate_tex_file
-        validation = validate_tex_file(str(tex_path))
-        if not validation["safe"]:
-            violations = validation["violations"]
-            log.error(
-                "API output failed LaTeX safety check for job %s: %s",
-                job.get("id", "?"), violations,
-            )
-            raise CVGenerationError(f"LaTeX safety violations: {violations}")
-
-        pdf_path = self._compile(tex_path, job_folder)
+        try:
+            pdf_path = compile_tex(tex_path, pdflatex_bin=self._pdflatex)
+        except UnsafeLatexError as exc:
+            log.error("API output failed LaTeX safety check for job %s: %s", job.get("id", "?"), exc)
+            raise CVGenerationError(str(exc)) from exc
+        except LatexCompileError as exc:
+            raise CVGenerationError(str(exc)) from exc
         audit("cv_generated", job_id=job.get("id", "?"), pdf_path=str(pdf_path))
         log.info("CV generated: %s", pdf_path)
         return pdf_path
@@ -157,42 +153,15 @@ class CVGenerator:
 
         return output
 
-    def _compile(self, tex_path: Path, output_dir: Path) -> Path:
-        """Run pdflatex twice (for cross-references) and return the PDF path."""
-        if not shutil.which(self._pdflatex):
-            raise CVGenerationError(
-                f"pdflatex not found at '{self._pdflatex}'. "
-                "Install texlive-latex-base or equivalent."
-            )
-
-        # Copy image assets from the template directory so relative \includegraphics
-        # paths resolve correctly when compiling the job-specific cv.tex.
+    def _copy_template_assets(self, output_dir: Path) -> None:
+        """
+        Copy image assets from the template directory so relative \\includegraphics
+        paths resolve — the compile sandbox only reads from the job folder.
+        """
         template_dir = self._template.parent
-        for img in template_dir.glob("*.png"):
-            shutil.copy2(img, output_dir / img.name)
-        for img in template_dir.glob("*.jpg"):
-            shutil.copy2(img, output_dir / img.name)
-
-        cmd = [
-            self._pdflatex,
-            "--no-shell-escape",
-            "-interaction=nonstopmode",
-            "-output-directory", str(output_dir),
-            str(tex_path),
-        ]
-
-        for pass_num in (1, 2):
-            log.debug("pdflatex pass %d: %s", pass_num, tex_path.name)
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-            if proc.returncode != 0:
-                output_tail = (proc.stdout or proc.stderr or "")[-3000:]
-                log.warning("pdflatex pass %d exited with %d:\n%s", pass_num, proc.returncode, output_tail)
-
-        pdf_path = output_dir / "cv.pdf"
-        if not pdf_path.exists():
-            raise CVGenerationError("pdflatex failed — cv.pdf not produced")
-
-        return pdf_path
+        for pattern in ("*.png", "*.jpg"):
+            for img in template_dir.glob(pattern):
+                shutil.copy2(img, output_dir / img.name)
 
     _COUNTRY_FOLDERS = {
         "DE": "germany", "AE": "uae", "SA": "ksa",

@@ -6,24 +6,23 @@ Pipeline per job:
   1. Read base .tex template and profile_summary.md from disk (dynamic — always latest)
   2. Call Anthropic API: system = rules + profile, user = job details
   3. Fill template placeholders programmatically (sender, recipient, date, body)
-  4. Validate output via latex_safety.validate_tex_file()
-  5. Compile with pdflatex (--no-shell-escape)
-  6. Return path to the generated PDF
+  4. Validate + compile in a sandbox via latex_safety.compile_tex()
+  5. Return path to the generated PDF
+
+All inserted values (including the LLM body) are escaped as plain text, so
+the LLM output can never inject LaTeX commands into the document.
 
 Output: {job_folder}/cover_letter.pdf
 """
 from __future__ import annotations
 
-import os
 import re
-import shutil
-import subprocess
-import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 from src.logger import audit, get_logger
+from src.utils.latex_safety import LatexCompileError, UnsafeLatexError, compile_tex, escape_latex
 from src.utils.sanitize import sanitize_company_for_path
 
 log = get_logger(__name__)
@@ -45,8 +44,7 @@ Never fabricate qualifications or experiences not present in the profile.
 - Total length: 250-400 words.
 - Tone: professional, confident, concise. Write like a real person, not a marketing brochure.
 - Use specific metrics and achievements from the profile where relevant.
-- The output will be inserted into a LaTeX document.
-- Escape LaTeX special characters: use \\% for %, \\& for &, \\# for #, \\$ for $, \\_ for _.
+- Write plain text only. Do not escape special characters; formatting is handled for you.
 - Do NOT include any salutation (e.g. "Dear..."), subject line, sign-off, or name.
 - Return ONLY the body paragraphs separated by blank lines, no markdown, no LaTeX commands.
 
@@ -72,12 +70,9 @@ Job Description (first 2000 chars):
 """
 
 
-def _escape_latex(text: str) -> str:
-    """Escape characters that are special in LaTeX, preserving already-escaped ones."""
-    # Don't double-escape: only escape chars not preceded by backslash
-    for char in ['&', '%', '$', '#', '_']:
-        text = re.sub(r'(?<!\\)' + re.escape(char), '\\' + char, text)
-    return text
+def _plain_body(text: str) -> str:
+    r"""Undo LaTeX-style escapes the LLM may still emit (e.g. \%), so escaping happens once, in code."""
+    return re.sub(r"\\([%&#$_{}])", r"\1", text)
 
 
 class CoverLetterError(Exception):
@@ -148,17 +143,13 @@ class CoverLetterGenerator:
         tex_path = job_folder / "cover_letter.tex"
         tex_path.write_text(tex_source, encoding="utf-8")
 
-        from src.utils.latex_safety import validate_tex_file
-        validation = validate_tex_file(str(tex_path))
-        if not validation["safe"]:
-            violations = validation["violations"]
-            log.error(
-                "Cover letter failed LaTeX safety check for job %s: %s",
-                job.get("id", "?"), violations,
-            )
-            raise CoverLetterError(f"LaTeX safety violations: {violations}")
-
-        pdf_path = self._compile(tex_path, job_folder)
+        try:
+            pdf_path = compile_tex(tex_path, pdflatex_bin=self._pdflatex)
+        except UnsafeLatexError as exc:
+            log.error("Cover letter failed LaTeX safety check for job %s: %s", job.get("id", "?"), exc)
+            raise CoverLetterError(str(exc)) from exc
+        except LatexCompileError as exc:
+            raise CoverLetterError(str(exc)) from exc
         audit("cover_letter_generated", job_id=job.get("id", "?"), pdf_path=str(pdf_path))
         log.info("Cover letter generated: %s", pdf_path)
         return pdf_path
@@ -217,30 +208,34 @@ class CoverLetterGenerator:
             recipient_city = country_name
 
         # Sender info
-        tex = tex.replace("SENDER-NAME", _escape_latex(self._candidate_name))
-        tex = tex.replace("SENDER-EMAIL", _escape_latex(self._candidate_email))
-        tex = tex.replace("SENDER-ADDRESS", _escape_latex(self._candidate_address))
-        tex = tex.replace("SENDER-PHONE", _escape_latex(self._candidate_phone))
-        tex = tex.replace("SENDER-CITY", _escape_latex(self._candidate_city))
+        tex = tex.replace("SENDER-NAME", escape_latex(self._candidate_name))
+        tex = tex.replace("SENDER-EMAIL", escape_latex(self._candidate_email))
+        tex = tex.replace("SENDER-ADDRESS", escape_latex(self._candidate_address))
+        tex = tex.replace("SENDER-PHONE", escape_latex(self._candidate_phone))
+        tex = tex.replace("SENDER-CITY", escape_latex(self._candidate_city))
 
         # Recipient info
-        tex = tex.replace("RECIPIENT-COMPANY", _escape_latex(company))
+        tex = tex.replace("RECIPIENT-COMPANY", escape_latex(company))
         tex = tex.replace("RECIPIENT-NAME", "")
         tex = tex.replace("RECIPIENT-STREET", "")
-        tex = tex.replace("RECIPIENT-POSTCODE-CITY", _escape_latex(recipient_city))
+        tex = tex.replace("RECIPIENT-POSTCODE-CITY", escape_latex(recipient_city))
         tex = tex.replace("RECIPIENT-COUNTRY", "")
 
         # Date
         tex = tex.replace("LETTER-DATE", datetime.now(timezone.utc).strftime("%d %B %Y"))
 
         # Subject
-        tex = tex.replace("SUBJECT-LINE", f"Application as {_escape_latex(title)}")
+        tex = tex.replace("SUBJECT-LINE", f"Application as {escape_latex(title)}")
 
         # Salutation
         tex = tex.replace("SALUTATION", "Dear Hiring Team,")
 
-        # Body — split LLM output into paragraphs and fill slots
-        paragraphs = [p.strip() for p in body_text.split("\n\n") if p.strip()]
+        # Body — split LLM output into paragraphs and escape each as plain text
+        paragraphs = [
+            escape_latex(_plain_body(p.strip()))
+            for p in body_text.split("\n\n")
+            if p.strip()
+        ]
 
         # Map paragraphs to placeholder slots
         placeholders = [
@@ -265,35 +260,6 @@ class CoverLetterGenerator:
         tex = re.sub(r'\n{3,}', '\n\n', tex)
 
         return tex
-
-    def _compile(self, tex_path: Path, output_dir: Path) -> Path:
-        """Run pdflatex twice (for cross-references) and return the PDF path."""
-        if not shutil.which(self._pdflatex):
-            raise CoverLetterError(
-                f"pdflatex not found at '{self._pdflatex}'. "
-                "Install texlive-latex-base or equivalent."
-            )
-
-        cmd = [
-            self._pdflatex,
-            "--no-shell-escape",
-            "-interaction=nonstopmode",
-            "-output-directory", str(output_dir),
-            str(tex_path),
-        ]
-
-        for pass_num in (1, 2):
-            log.debug("pdflatex pass %d: %s", pass_num, tex_path.name)
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-            if proc.returncode != 0:
-                output_tail = (proc.stdout or proc.stderr or "")[-3000:]
-                log.warning("pdflatex pass %d exited with %d:\n%s", pass_num, proc.returncode, output_tail)
-
-        pdf_path = output_dir / "cover_letter.pdf"
-        if not pdf_path.exists():
-            raise CoverLetterError("pdflatex failed — cover_letter.pdf not produced")
-
-        return pdf_path
 
     _COUNTRY_FOLDERS = {
         "DE": "germany", "AE": "uae", "SA": "ksa",

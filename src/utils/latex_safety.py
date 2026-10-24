@@ -1,31 +1,61 @@
 r"""
-LaTeX Safety Validator
-Scans generated .tex files for dangerous primitives before compilation.
-LaTeX is Turing-complete — \write18 with --shell-escape = arbitrary code execution.
+LaTeX Safety — validation, escaping, and sandboxed compilation.
 
-ALWAYS compile with: pdflatex -no-shell-escape
-NEVER compile with: pdflatex --shell-escape
+LaTeX is Turing-complete: \write18 with shell-escape = arbitrary code
+execution, and \input / \openin can read any file the process can see
+(including /proc/self/environ, which holds every secret in the container).
+
+Two independent layers protect generated documents:
+  1. validate_tex_file() rejects file-I/O primitives and the tricks used to
+     hide them (\csname construction, ^^ character escapes, \catcode).
+  2. compile_tex() runs pdflatex with kpathsea's paranoid file access
+     (openin_any=p / openout_any=p: no absolute paths, no parent dirs, no
+     dotfiles) and a minimal environment containing no secrets — so even a
+     payload that slips past the validator cannot read anything useful.
+
+Never compile generated LaTeX any other way.
 """
+import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
+from src.logger import get_logger
+
+log = get_logger(__name__)
+
+# A TeX control word ends at the first non-letter, so (?![A-Za-z]) makes
+# \include match but not \includegraphics.
+_CMD_END = r"(?![A-Za-z])"
 
 DANGEROUS_PATTERNS = [
-    (r'\\write18', "shell escape command execution"),
-    (r'\\immediate\s*\\write', "immediate write (can execute commands)"),
-    (r'\\input\{/', "absolute path file inclusion"),
-    (r'\\include\{/', "absolute path file inclusion"),
-    (r'\\openin', "file read primitive"),
-    (r'\\openout', "file write primitive"),
-    (r'\\catcode', "category code manipulation"),
-    (r'\\csname\s+.*\\endcsname', "dynamic command construction"),
-    (r'\\verbatiminput', "verbatim file inclusion"),
-    (r'\\newwrite', "file handle creation"),
-    (r'\\closeout', "file handle close"),
-    (r'\\special\s*\{.*\|', "pipe in special command"),
-    (r'\\url\{[^}]*\|', "pipe in url command"),
+    (r"\\write18", "shell escape command execution"),
+    (r"\\immediate" + _CMD_END, "immediate write (can execute commands)"),
+    (
+        r"\\(input|include|InputIfFileExists|IfFileExists|verbatiminput"
+        r"|lstinputlisting|includepdf|openin|openout|read|readline"
+        r"|newread|newwrite|closein|closeout)" + _CMD_END,
+        "file I/O primitive",
+    ),
+    (r"\\pdf(filedump|filesize|filemoddate|mdfivesum)" + _CMD_END, "file inspection primitive"),
+    (r"\\(directlua|luaexec)" + _CMD_END, "Lua code execution"),
+    (r"\\catcode" + _CMD_END, "category code manipulation"),
+    (r"\\csname" + _CMD_END, "dynamic command construction"),
+    (r"\^\^", "TeX character-code escape (can hide commands)"),
+    (r"\\special\s*\{[^}]*\|", "pipe in special command"),
+    (r"\\url\{[^}]*\|", "pipe in url command"),
 ]
+
+_COMPILED_PATTERNS = [(re.compile(p), desc) for p, desc in DANGEROUS_PATTERNS]
+
+
+class UnsafeLatexError(ValueError):
+    """The .tex source contains a forbidden primitive and must not be compiled."""
+
+
+class LatexCompileError(RuntimeError):
+    """pdflatex is unavailable or did not produce a PDF."""
 
 
 def validate_tex_file(filepath: str) -> dict:
@@ -37,59 +67,86 @@ def validate_tex_file(filepath: str) -> dict:
         If safe=False, do NOT compile the file.
     """
     try:
-        content = Path(filepath).read_text(encoding='utf-8', errors='replace')
+        content = Path(filepath).read_text(encoding="utf-8", errors="replace")
     except FileNotFoundError:
         return {"safe": False, "violations": [f"File not found: {filepath}"]}
 
-    violations = []
-    for pattern, description in DANGEROUS_PATTERNS:
-        if re.search(pattern, content):
-            violations.append(f"{description}: matched '{pattern}'")
-
+    violations = [
+        f"{description}: matched '{pattern.pattern}'"
+        for pattern, description in _COMPILED_PATTERNS
+        if pattern.search(content)
+    ]
     return {"safe": len(violations) == 0, "violations": violations}
 
 
-def safe_compile(tex_path: str, output_dir: str = None) -> dict:
-    """
-    Compile a .tex file to PDF with safety guarantees.
-    Validates the file first, then compiles with --no-shell-escape.
+_LATEX_SPECIALS = {
+    "\\": r"\textbackslash{}",
+    "{": r"\{",
+    "}": r"\}",
+    "$": r"\$",
+    "&": r"\&",
+    "#": r"\#",
+    "%": r"\%",
+    "_": r"\_",
+    "^": r"\textasciicircum{}",
+    "~": r"\textasciitilde{}",
+}
 
-    Returns:
-        {"status": "success"|"blocked"|"error", ...}
+
+def escape_latex(text: str) -> str:
+    """Escape plain text for insertion into a LaTeX document (single pass, no double-escaping)."""
+    return "".join(_LATEX_SPECIALS.get(c, c) for c in text)
+
+
+def _sandbox_env() -> dict[str, str]:
+    """Minimal environment for pdflatex: no secrets, paranoid kpathsea file access."""
+    env = {
+        "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
+        "openin_any": "p",
+        "openout_any": "p",
+        "shell_escape": "f",
+    }
+    for name in ("HOME", "LANG", "LC_ALL"):
+        if name in os.environ:
+            env[name] = os.environ[name]
+    return env
+
+
+def compile_tex(tex_path: Path, pdflatex_bin: str = "pdflatex", timeout: int = 60) -> Path:
     """
-    check = validate_tex_file(tex_path)
+    Validate, then compile *tex_path* to PDF inside its own folder.
+
+    pdflatex runs with the folder as cwd and the file passed by bare name, so
+    the paranoid openin policy confines all reads to that folder (plus the
+    system TeX tree for packages).
+
+    Returns the path of the generated PDF.
+    Raises UnsafeLatexError, LatexCompileError, or subprocess.TimeoutExpired.
+    """
+    check = validate_tex_file(str(tex_path))
     if not check["safe"]:
-        return {
-            "status": "blocked",
-            "reason": f"Dangerous LaTeX detected: {check['violations']}",
-        }
+        raise UnsafeLatexError(f"LaTeX safety violations: {check['violations']}")
 
-    out_dir = output_dir or str(Path(tex_path).parent)
-    cmd = [
-        "pdflatex",
-        "-interaction=nonstopmode",
-        "-no-shell-escape",
-        "-output-directory", out_dir,
-        tex_path,
-    ]
-
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=60,
-            shell=False,
+    if not shutil.which(pdflatex_bin):
+        raise LatexCompileError(
+            f"pdflatex not found at '{pdflatex_bin}'. Install texlive-latex-base or equivalent."
         )
 
-        if result.returncode == 0:
-            pdf_path = str(Path(tex_path).with_suffix('.pdf'))
-            return {"status": "success", "pdf_path": pdf_path}
-        else:
-            return {
-                "status": "error",
-                "reason": "LaTeX compilation failed",
-                "stderr": result.stderr[:500],
-            }
-    except subprocess.TimeoutExpired:
-        return {"status": "error", "reason": "Compilation timed out (60s)"}
+    workdir = tex_path.parent
+    cmd = [pdflatex_bin, "-no-shell-escape", "-interaction=nonstopmode", tex_path.name]
+    env = _sandbox_env()
+
+    # Two passes for cross-references
+    for pass_num in (1, 2):
+        log.debug("pdflatex pass %d: %s", pass_num, tex_path.name)
+        proc = subprocess.run(
+            cmd, cwd=workdir, env=env, capture_output=True, text=True, timeout=timeout,
+        )
+        if proc.returncode != 0:
+            output_tail = (proc.stdout or proc.stderr or "")[-3000:]
+            log.warning("pdflatex pass %d exited with %d:\n%s", pass_num, proc.returncode, output_tail)
+
+    pdf_path = tex_path.with_suffix(".pdf")
+    if not pdf_path.exists():
+        raise LatexCompileError(f"pdflatex failed — {pdf_path.name} not produced")
+    return pdf_path
