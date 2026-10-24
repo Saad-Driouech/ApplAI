@@ -27,19 +27,18 @@ _INJECTION_PATTERNS = [
         r'(?i)when\s+(generating|creating|writing|tailoring)\s+(the\s+)?'
         r'(cv|resume|cover\s*letter)'
     ), "injection_document_manipulation"),
+    # Call shapes only, with word boundaries — plain prose like
+    # "Retrieval (RAG)" or "exec (CEO)" must not match.
     (re.compile(
         r'(?i)('
-        r'subprocess[\s.(]|'      # subprocess module (never in a real JD)
-        r'os\.system\s*\(|'       # os.system() call
-        r'__import__\s*\(|'       # __import__() call
-        r'eval\s*\(|'             # eval() call
-        r'exec\s*\('              # exec() call
+        r'\bsubprocess\.(run|call|Popen|check_output|check_call)\s*\(|'
+        r'\bos\.(system|popen)\s*\(|'
+        r'__import__\s*\(|'
+        r'\beval\(|'
+        r'\bexec\('
         r')'
     ), "injection_code_execution"),
 ]
-
-# Unicode ranges used to hide text (invisible to humans, visible to LLMs)
-_HIDDEN_UNICODE_RANGES = set(range(0x200B, 0x2070)) | {0xFEFF, 0xFFFE}
 
 MAX_JD_LENGTH = 50_000
 
@@ -60,15 +59,14 @@ def sanitize_jd(text: str) -> dict:
 
     flags = []
 
-    # 1. Strip hidden Unicode characters
+    # 1. Strip hidden Unicode characters. Every invisible character used to
+    #    hide text (zero-width, bidi overrides, BOM, soft hyphen, tag chars)
+    #    is category Cf; control/private/unassigned chars are Cc/Co/Cn.
+    #    Visible punctuation (dashes, curly quotes, bullets) is kept.
     hidden_count = 0
     clean_chars = []
     for char in text:
-        code = ord(char)
-        cat = unicodedata.category(char)
-        if cat.startswith('C') and char not in '\n\r\t':
-            hidden_count += 1
-        elif code in _HIDDEN_UNICODE_RANGES:
+        if unicodedata.category(char).startswith('C') and char not in '\n\r\t':
             hidden_count += 1
         else:
             clean_chars.append(char)

