@@ -22,7 +22,7 @@ from src.logger import get_logger
 log = get_logger(__name__)
 
 # Bump this when the schema changes.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _DDL = """
 PRAGMA journal_mode=WAL;
@@ -107,6 +107,15 @@ _MIGRATIONS = {
     3: [
         "ALTER TABLE jobs ADD COLUMN dedup_key TEXT",
         "CREATE INDEX IF NOT EXISTS idx_jobs_dedup ON jobs(dedup_key)",
+    ],
+    4: [
+        # Data fix: unparseable LLM replies used to be stored as score 0 / skipped.
+        # Send those jobs back to the scoring queue.
+        """
+        UPDATE jobs
+        SET status = 'new', score = NULL, score_reasoning = NULL, skip_reason = NULL
+        WHERE status = 'skipped' AND score = 0 AND score_reasoning LIKE 'Parse error%'
+        """,
     ],
 }
 

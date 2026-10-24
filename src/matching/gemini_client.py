@@ -11,13 +11,8 @@ Budget tracking is in-memory; for multi-process deployments, use Redis instead.
 """
 from __future__ import annotations
 
-import json
-import re
 import time
-from dataclasses import dataclass
-from datetime import datetime, timezone
 from threading import Lock
-from typing import Optional
 
 from tenacity import (
     retry,
@@ -27,6 +22,8 @@ from tenacity import (
 )
 
 from src.logger import audit, get_logger
+# Re-exported: other clients and the scorer import these from here
+from src.matching.response_parser import ScoreParseError, ScoreResult, parse_score_response
 
 log = get_logger(__name__)
 
@@ -68,15 +65,6 @@ Strong demonstrated skills can compensate for fewer years.
 - "Preferred" or "nice to have" requirements should NOT lower the score significantly.
 - Return raw JSON, no markdown fences.
 {user_preferences}"""
-
-
-@dataclass
-class ScoreResult:
-    score: float
-    reasoning: str
-    must_haves_met: list[str]
-    gaps: list[str]
-    raw_response: str
 
 
 class BudgetExceeded(Exception):
@@ -206,7 +194,7 @@ class GeminiClient:
             log.error("Gemini scoring failed for job %s: %s", job.get("id", "?"), exc)
             raise
 
-        result = self._parse_response(raw)
+        result = parse_score_response(raw)
         audit(
             "gemini_score",
             job_id=job.get("id", "?"),
@@ -214,33 +202,6 @@ class GeminiClient:
             remaining_quota=self._limiter.daily_remaining,
         )
         return result
-
-    @staticmethod
-    def _parse_response(raw: str) -> ScoreResult:
-        # Strip markdown fences if the model wrapped its output
-        cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw.strip(), flags=re.MULTILINE)
-        try:
-            data = json.loads(cleaned)
-        except json.JSONDecodeError as exc:
-            log.warning("Gemini returned non-JSON; attempting regex extraction. Error: %s", exc)
-            # Last-resort: extract a score with regex
-            score_match = re.search(r'"score"\s*:\s*([0-9.]+)', cleaned)
-            score = float(score_match.group(1)) if score_match else 0.0
-            return ScoreResult(
-                score=score,
-                reasoning="Parse error — see raw_response",
-                must_haves_met=[],
-                gaps=[],
-                raw_response=raw,
-            )
-
-        return ScoreResult(
-            score=float(data.get("score", 0.0)),
-            reasoning=str(data.get("reasoning", "")),
-            must_haves_met=list(data.get("must_haves_met", [])),
-            gaps=list(data.get("gaps", [])),
-            raw_response=raw,
-        )
 
     @property
     def daily_remaining(self) -> int:

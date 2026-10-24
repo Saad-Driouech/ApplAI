@@ -184,6 +184,26 @@ class TestCrossSourceDedup:
         assert result is True
 
 
+class TestMigrations:
+    def test_v4_requeues_jobs_wrongly_scored_zero_by_parse_errors(self):
+        conn, path = _db()
+        victim, real_low = _sample_job(ext_id="a"), _sample_job(ext_id="b")
+        real_low["title"] = "Other role"
+        upsert_job(conn, victim)
+        upsert_job(conn, real_low)
+        update_score(conn, victim["id"], 0.0, "Parse error — see raw_response", "skipped")
+        update_score(conn, real_low["id"], 2.0, "Parse error — see raw_response", "skipped")
+        # Pretend the DB is still at schema v3
+        conn.execute("DELETE FROM schema_meta WHERE version >= 4")
+        conn.commit()
+
+        conn = init_db(path)
+        rows = {r["id"]: r for r in conn.execute("SELECT id, status, score FROM jobs")}
+        assert rows[victim["id"]]["status"] == "new" and rows[victim["id"]]["score"] is None
+        # A score the old regex actually recovered is a real (low) score — left alone
+        assert rows[real_low["id"]]["status"] == "skipped"
+
+
 class TestFeedback:
     def test_record_and_retrieve_feedback_event(self):
         import uuid

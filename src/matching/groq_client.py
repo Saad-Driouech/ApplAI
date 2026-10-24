@@ -9,15 +9,13 @@ Free tier (llama-3.3-70b-versatile): 30 RPM, ~14,400 RPD.
 """
 from __future__ import annotations
 
-import json
-import re
-
 from src.matching.gemini_client import (
     BudgetExceeded,
     ScoreResult,
     _RateLimiter,
     _SCORE_PROMPT_TEMPLATE,
 )
+from src.matching.response_parser import parse_score_response
 from src.logger import audit, get_logger
 
 log = get_logger(__name__)
@@ -83,7 +81,7 @@ class GroqClient:
             log.error("Groq scoring failed for job %s: %s", job.get("id", "?"), exc)
             raise
 
-        result = _parse_response(raw)
+        result = parse_score_response(raw)
         audit(
             "groq_score",
             job_id=job.get("id", "?"),
@@ -95,28 +93,3 @@ class GroqClient:
     @property
     def daily_remaining(self) -> int:
         return self._limiter.daily_remaining
-
-
-def _parse_response(raw: str) -> ScoreResult:
-    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw.strip(), flags=re.MULTILINE)
-    try:
-        data = json.loads(cleaned)
-    except json.JSONDecodeError as exc:
-        log.warning("Groq returned non-JSON; attempting regex extraction. Error: %s", exc)
-        score_match = re.search(r'"score"\s*:\s*([0-9.]+)', cleaned)
-        score = float(score_match.group(1)) if score_match else 0.0
-        return ScoreResult(
-            score=score,
-            reasoning="Parse error — see raw_response",
-            must_haves_met=[],
-            gaps=[],
-            raw_response=raw,
-        )
-
-    return ScoreResult(
-        score=float(data.get("score", 0.0)),
-        reasoning=str(data.get("reasoning", "")),
-        must_haves_met=list(data.get("must_haves_met", [])),
-        gaps=list(data.get("gaps", [])),
-        raw_response=raw,
-    )

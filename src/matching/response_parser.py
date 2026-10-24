@@ -1,0 +1,96 @@
+"""
+Parse and validate the Tier-1 scoring LLM's reply.
+
+Shared by the Gemini, Groq, and Ollama clients so every provider gets the same
+tolerance for real-world reply shapes (markdown fences, prose around the JSON,
+<think> blocks, truncated output) — and the same refusal to invent a score.
+
+An unusable reply raises ScoreParseError. It must never become score 0.0:
+that would silently mark the job as a low-score skip.
+"""
+from __future__ import annotations
+
+import json
+import math
+import re
+from dataclasses import dataclass
+from typing import Any, Optional
+
+
+@dataclass
+class ScoreResult:
+    score: float
+    reasoning: str
+    must_haves_met: list[str]
+    gaps: list[str]
+    raw_response: str
+
+
+class ScoreParseError(ValueError):
+    """The model reply contained no usable score."""
+
+
+_THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+_FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
+_SCORE_FIELD = re.compile(r'"score"\s*:\s*"?(-?[0-9]+(?:\.[0-9]+)?)')
+
+
+def parse_score_response(raw: Optional[str]) -> ScoreResult:
+    """Turn a raw model reply into a validated ScoreResult, or raise ScoreParseError."""
+    if not raw or not raw.strip():
+        raise ScoreParseError("empty model response")
+
+    text = _FENCE.sub("", _THINK_BLOCK.sub("", raw)).strip()
+
+    data = _load_json_object(text)
+    if data is not None:
+        return ScoreResult(
+            score=_valid_score(data.get("score")),
+            reasoning=str(data.get("reasoning", "")),
+            must_haves_met=_str_list(data.get("must_haves_met")),
+            gaps=_str_list(data.get("gaps")),
+            raw_response=raw,
+        )
+
+    # Malformed or truncated JSON: accept only an explicit "score" field
+    match = _SCORE_FIELD.search(text)
+    if not match:
+        raise ScoreParseError(f"no score in model response: {raw[:200]!r}")
+    return ScoreResult(
+        score=_valid_score(match.group(1)),
+        reasoning="Partial model response (malformed JSON); score recovered",
+        must_haves_met=[],
+        gaps=[],
+        raw_response=raw,
+    )
+
+
+def _load_json_object(text: str) -> Optional[dict[str, Any]]:
+    """Parse the reply as JSON, falling back to the outermost {...} span."""
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        start, end = text.find("{"), text.rfind("}")
+        if start == -1 or end <= start:
+            return None
+        try:
+            data = json.loads(text[start:end + 1])
+        except json.JSONDecodeError:
+            return None
+    return data if isinstance(data, dict) else None
+
+
+def _valid_score(value: Any) -> float:
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        raise ScoreParseError(f"score is not a number: {value!r}") from None
+    if math.isnan(score) or not 0.0 <= score <= 10.0:
+        raise ScoreParseError(f"score out of range 0-10: {score}")
+    return score
+
+
+def _str_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(v) for v in value]
+    return [str(value)] if value else []

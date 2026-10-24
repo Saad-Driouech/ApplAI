@@ -1,7 +1,50 @@
-"""Tests for src/matching/scorer.py — keyword pre-filter."""
+"""Tests for src/matching/scorer.py — keyword pre-filter and scoring outcomes."""
 import pytest
 
-from src.matching.scorer import has_ai_keywords
+import src.database as db
+from src.matching.response_parser import ScoreParseError, parse_score_response
+from src.matching.scorer import Scorer, has_ai_keywords
+
+
+class _FakeClient:
+    """Stands in for a Tier-1 LLM client: returns a fixed raw reply."""
+
+    def __init__(self, raw):
+        self._raw = raw
+
+    def score_job(self, job, cv_summary, user_preferences=""):
+        return parse_score_response(self._raw)
+
+
+@pytest.fixture
+def db_with_job(tmp_path):
+    path = tmp_path / "t.db"
+    db.init_db(path)
+    with db.get_conn(path) as conn:
+        db.upsert_job(conn, {
+            "id": "j1", "external_id": "e1", "source": "test",
+            "title": "Machine Learning Engineer", "company": "Acme", "country": "DE",
+            "source_url": "https://x", "description": "PyTorch models",
+        })
+    return path
+
+
+def _job_row(path):
+    with db.get_conn(path) as conn:
+        return conn.execute("SELECT status, score, score_reasoning FROM jobs WHERE id = 'j1'").fetchone()
+
+
+class TestScoringOutcomes:
+    def test_unparseable_reply_leaves_job_for_retry(self, db_with_job):
+        stats = Scorer(db_with_job, _FakeClient("I think this is a great fit!"), cv_summary="").run()
+        assert stats["parse_errors"] == 1 and stats["scored"] == 0
+        row = _job_row(db_with_job)
+        assert row["status"] == "new" and row["score"] is None
+
+    def test_valid_reply_is_scored(self, db_with_job):
+        stats = Scorer(db_with_job, _FakeClient('{"score": 8, "reasoning": "fit"}'), cv_summary="").run()
+        assert stats["queued"] == 1
+        assert tuple(_job_row(db_with_job)) == ("queued", 8.0, "fit")
 
 
 class TestHasAiKeywords:

@@ -15,7 +15,7 @@ from typing import Optional
 
 import src.database as db
 from src.logger import audit, get_logger
-from src.matching.gemini_client import BudgetExceeded, ScoreResult
+from src.matching.gemini_client import BudgetExceeded, ScoreParseError, ScoreResult
 from src.utils.jd_sanitizer import sanitize_jd
 
 log = get_logger(__name__)
@@ -96,9 +96,14 @@ class Scorer:
     def run(self) -> dict[str, int]:
         """
         Score all 'new' jobs in the database.
-        Returns a summary dict: {scored, queued, skipped, filtered, errors, quota_hit}
+        Returns a summary dict: {scored, queued, skipped, filtered, errors, parse_errors, quota_hit}
+
+        Jobs that fail to score (errors / parse_errors) stay 'new' and are retried next run.
         """
-        stats = {"scored": 0, "queued": 0, "skipped": 0, "filtered": 0, "errors": 0, "quota_hit": 0}
+        stats = {
+            "scored": 0, "queued": 0, "skipped": 0, "filtered": 0,
+            "errors": 0, "parse_errors": 0, "quota_hit": 0,
+        }
 
         with db.get_conn(self._db_path) as conn:
             jobs = db.get_jobs_by_status(conn, "new", limit=self._batch_size)
@@ -146,6 +151,11 @@ class Scorer:
                     log.warning("Quota hit, no fallback available: %s", exc)
                     stats["quota_hit"] += 1
                     break
+            except ScoreParseError as exc:
+                # Never record an unparseable reply as a score — leave the job for retry
+                log.warning("Unusable model reply for job %s: %s", job_id, exc)
+                stats["parse_errors"] += 1
+                continue
             except Exception as exc:
                 log.error("Scoring error for job %s: %s", job_id, exc, exc_info=True)
                 stats["errors"] += 1
