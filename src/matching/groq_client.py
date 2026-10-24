@@ -12,8 +12,8 @@ from __future__ import annotations
 from src.matching.gemini_client import (
     BudgetExceeded,
     ScoreResult,
-    _RateLimiter,
     _SCORE_PROMPT_TEMPLATE,
+    shared_limiter,
 )
 from src.matching.response_parser import parse_score_response
 from src.logger import audit, get_logger
@@ -42,7 +42,7 @@ class GroqClient:
             ) from exc
 
         self._model = model
-        self._limiter = _RateLimiter(rpm=rpm, rpd=rpd)
+        self._limiter = shared_limiter("Groq", model, rpm=rpm, rpd=rpd)
         self._client = Groq(api_key=api_key)
 
     def _call(self, prompt: str) -> str:
@@ -55,8 +55,9 @@ class GroqClient:
                 max_tokens=512,
             )
         except Exception as exc:
-            # Groq raises RateLimitError for both RPM and TPD (token quota) 429s.
-            # Re-raise as BudgetExceeded so the scorer stops cleanly.
+            # The Groq SDK already retries 429s honoring retry-after, so a 429
+            # that reaches us means the quota (RPD/TPD) is exhausted.
+            # Re-raise as BudgetExceeded so the scorer switches to its fallback.
             exc_type = type(exc).__name__
             if "RateLimitError" in exc_type or getattr(exc, "status_code", None) == 429:
                 raise BudgetExceeded(str(exc)) from exc

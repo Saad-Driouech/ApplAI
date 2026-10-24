@@ -16,7 +16,7 @@ from threading import Lock
 
 from tenacity import (
     retry,
-    retry_if_exception_type,
+    retry_if_exception,
     stop_after_attempt,
     wait_exponential,
 )
@@ -74,7 +74,8 @@ class BudgetExceeded(Exception):
 class _RateLimiter:
     """Token-bucket style limiter for RPM and RPD."""
 
-    def __init__(self, rpm: int, rpd: int):
+    def __init__(self, rpm: int, rpd: int, name: str = "Gemini"):
+        self._name = name
         self._rpm = rpm
         self._rpd = rpd
         self._minute_count = 0
@@ -95,11 +96,11 @@ class _RateLimiter:
 
             if self._day_count >= self._rpd:
                 raise BudgetExceeded(
-                    f"Daily Gemini quota exhausted ({self._rpd} requests/day)"
+                    f"Daily {self._name} quota exhausted ({self._rpd} requests/day)"
                 )
             if self._minute_count >= self._rpm:
                 sleep_for = self._minute_reset - now
-                log.info("Gemini RPM limit reached; sleeping %.1fs", sleep_for)
+                log.info("%s RPM limit reached; sleeping %.1fs", self._name, sleep_for)
                 time.sleep(sleep_for + 0.1)
                 self._minute_count = 0
                 self._minute_reset = time.time() + 60
@@ -111,6 +112,38 @@ class _RateLimiter:
     def daily_remaining(self) -> int:
         with self._lock:
             return max(0, self._rpd - self._day_count)
+
+
+# One limiter per (provider, model) for the whole process. Clients are built
+# per pipeline run, so per-instance counters would reset the daily budget on
+# every /score call. Counts reset on process restart; the provider's own 429
+# (mapped to BudgetExceeded) remains the authoritative backstop.
+_SHARED_LIMITERS: dict[tuple[str, str], _RateLimiter] = {}
+_SHARED_LIMITERS_LOCK = Lock()
+
+
+def shared_limiter(provider: str, model: str, rpm: int, rpd: int) -> _RateLimiter:
+    with _SHARED_LIMITERS_LOCK:
+        key = (provider, model)
+        if key not in _SHARED_LIMITERS:
+            _SHARED_LIMITERS[key] = _RateLimiter(rpm=rpm, rpd=rpd, name=provider)
+        return _SHARED_LIMITERS[key]
+
+
+_TRANSIENT_STATUS = {429, 500, 502, 503, 504}
+
+
+def _status_code(exc: BaseException) -> int | None:
+    """HTTP status of a provider SDK error (google-genai uses .code, others .status_code)."""
+    code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
+    return code if isinstance(code, int) else None
+
+
+def _is_transient(exc: BaseException) -> bool:
+    if _status_code(exc) in _TRANSIENT_STATUS:
+        return True
+    import httpx
+    return isinstance(exc, (httpx.TransportError, TimeoutError, ConnectionError))
 
 
 class GeminiClient:
@@ -127,7 +160,7 @@ class GeminiClient:
         rpd: int = 500,
     ):
         self._model = model
-        self._limiter = _RateLimiter(rpm=rpm, rpd=rpd)
+        self._limiter = shared_limiter("Gemini", model, rpm=rpm, rpd=rpd)
         self._client = self._build_client(api_key)
 
     @staticmethod
@@ -141,15 +174,30 @@ class GeminiClient:
             ) from exc
         return genai.Client(api_key=api_key)
 
+    def _call(self, prompt: str) -> str:
+        """
+        Budget check, then the API call with retries on transient failures.
+
+        BudgetExceeded from the local limiter is never retried. A 429 that
+        survives the retries means the provider quota is exhausted and is
+        raised as BudgetExceeded so the scorer can switch to its fallback.
+        """
+        self._limiter.acquire()
+        try:
+            return self._generate(prompt)
+        except Exception as exc:
+            if _status_code(exc) == 429:
+                raise BudgetExceeded(f"Gemini quota exhausted (HTTP 429): {exc}") from exc
+            raise
+
     @retry(
-        retry=retry_if_exception_type(Exception),
+        retry=retry_if_exception(_is_transient),
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=2, min=5, max=60),
         reraise=True,
     )
-    def _call(self, prompt: str) -> str:
+    def _generate(self, prompt: str) -> str:
         from google.genai import types
-        self._limiter.acquire()
         response = self._client.models.generate_content(
             model=self._model,
             contents=prompt,

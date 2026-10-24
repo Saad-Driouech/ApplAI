@@ -2,6 +2,7 @@
 import pytest
 
 import src.database as db
+from src.matching.gemini_client import BudgetExceeded
 from src.matching.response_parser import ScoreParseError, parse_score_response
 from src.matching.scorer import Scorer, has_ai_keywords
 
@@ -40,6 +41,27 @@ class TestScoringOutcomes:
         assert stats["parse_errors"] == 1 and stats["scored"] == 0
         row = _job_row(db_with_job)
         assert row["status"] == "new" and row["score"] is None
+
+    def test_quota_exhausted_switches_to_fallback(self, db_with_job):
+        class _QuotaClient:
+            def score_job(self, *args, **kwargs):
+                raise BudgetExceeded("quota")
+
+        stats = Scorer(
+            db_with_job, _QuotaClient(), cv_summary="",
+            fallback_client=_FakeClient('{"score": 7, "reasoning": "fit"}'),
+        ).run()
+        assert stats["quota_hit"] == 1 and stats["queued"] == 1
+        assert _job_row(db_with_job)["status"] == "queued"
+
+    def test_quota_exhausted_without_fallback_stops_batch(self, db_with_job):
+        class _QuotaClient:
+            def score_job(self, *args, **kwargs):
+                raise BudgetExceeded("quota")
+
+        stats = Scorer(db_with_job, _QuotaClient(), cv_summary="").run()
+        assert stats["quota_hit"] == 1
+        assert _job_row(db_with_job)["status"] == "new"
 
     def test_valid_reply_is_scored(self, db_with_job):
         stats = Scorer(db_with_job, _FakeClient('{"score": 8, "reasoning": "fit"}'), cv_summary="").run()
