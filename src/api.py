@@ -297,7 +297,13 @@ def _process_rescue(job_id: str, msg_id: str) -> None:
 
 
 def _process_decision(app_id: str, decision: str, msg_id: str) -> None:
-    """Background task: update DB, Notion, and Discord message after a button click."""
+    """
+    Background task: update DB, files, Notion, and Discord after a button click.
+
+    Idempotent: only the first click for an application does any work. Repeated
+    clicks (double-clicks, Discord retries, Reject after Approve) never touch
+    files; they only re-sync the Discord message to the recorded decision.
+    """
     cfg = _get_cfg()
 
     with db.get_conn(cfg.paths.db_path) as conn:
@@ -315,59 +321,72 @@ def _process_decision(app_id: str, decision: str, msg_id: str) -> None:
 
     app = dict(row)
 
-    # Handle file operations based on decision
-    from src.utils.file_manager import promote_to_final, cleanup_pending
-    from pathlib import Path
-
-    if decision == "approved":
-        pending = Path(app.get("cv_path", "")).parent
-        candidate_name = os.environ.get("CANDIDATE_NAME", "Candidate")
-        paths = promote_to_final(
-            pending=pending,
-            working_dir=cfg.paths.working_dir,
-            country=app.get("country", ""),
-            company=app.get("company", ""),
-            candidate_name=candidate_name,
-        )
-        # Update DB with final paths
-        with db.get_conn(cfg.paths.db_path) as conn:
-            conn.execute(
-                "UPDATE applications SET cv_path = ?, cover_letter_path = ? WHERE id = ?",
-                (paths["cv_path"], paths["cover_letter_path"], app_id),
-            )
-    else:
-        pending = Path(app.get("cv_path", "")).parent
-        cleanup_pending(pending)
-
-    # Update DB status
-    new_status = "approved" if decision == "approved" else "rejected"
+    # Atomically claim the decision — the conditional UPDATE lets only one click win
     with db.get_conn(cfg.paths.db_path) as conn:
-        db.record_user_decision(
-            conn,
-            app_id=app_id,
-            decision=decision,
-            notion_page_id=app.get("notion_page_id"),
-        )
-        db.update_status(conn, app["job_id"], new_status)
+        claimed = db.record_user_decision(conn, app_id=app_id, decision=decision)
+        existing = conn.execute(
+            "SELECT user_decision FROM applications WHERE id = ?", (app_id,)
+        ).fetchone()["user_decision"]
 
-    # Update Notion
+    if not claimed:
+        log.info("App %s already decided (%s); ignoring repeated click", app_id, existing)
+        _update_discord_decision(cfg, msg_id, existing, app.get("title", ""))
+        return
+
+    # Documents always live in .pending/<app_id> until a decision is applied
+    from src.utils.file_manager import cleanup_pending, pending_dir, promote_to_final
+
+    pending = pending_dir(cfg.paths.working_dir, app_id)
+    try:
+        if decision == "approved":
+            paths = promote_to_final(
+                pending=pending,
+                working_dir=cfg.paths.working_dir,
+                country=app.get("country") or "",
+                company=app.get("company") or "",
+                candidate_name=os.environ.get("CANDIDATE_NAME", "Candidate"),
+            )
+            with db.get_conn(cfg.paths.db_path) as conn:
+                conn.execute(
+                    "UPDATE applications SET cv_path = ?, cover_letter_path = ? WHERE id = ?",
+                    (paths["cv_path"], paths["cover_letter_path"], app_id),
+                )
+                db.update_status(conn, app["job_id"], "approved")
+        else:
+            cleanup_pending(pending)
+            with db.get_conn(cfg.paths.db_path) as conn:
+                db.update_status(conn, app["job_id"], "rejected")
+    except Exception:
+        log.error("Applying decision failed for app %s; releasing claim", app_id, exc_info=True)
+        with db.get_conn(cfg.paths.db_path) as conn:
+            db.release_user_decision(conn, app_id)
+        raise
+
+    # Notion is a secondary record — its failure must not leave Discord buttons live
     if app.get("notion_page_id"):
         from src.delivery.notion_tracker import NotionTracker
-        NotionTracker(
-            api_token=cfg.notion.api_token,
-            database_id=cfg.notion.job_tracker_db_id,
-        ).record_decision(app["notion_page_id"], decision)
+        try:
+            NotionTracker(
+                api_token=cfg.notion.api_token,
+                database_id=cfg.notion.job_tracker_db_id,
+            ).record_decision(app["notion_page_id"], decision)
+        except Exception:
+            log.error("Notion update failed for app %s", app_id, exc_info=True)
 
-    # Edit Discord message (remove buttons, show decision)
+    _update_discord_decision(cfg, msg_id, decision, app.get("title", ""))
+
+    audit("decision_recorded", app_id=app_id, decision=decision)
+    log.info("Decision recorded: app=%s decision=%s", app_id, decision)
+
+
+def _update_discord_decision(cfg, msg_id: str, decision: str, job_title: str) -> None:
+    """Edit the Discord message to show the decision and remove the buttons."""
     from src.delivery.discord_bot import DiscordDelivery
     discord = DiscordDelivery(
         bot_token=cfg.discord.bot_token,
         channel_id=cfg.discord.channel_id,
     )
     try:
-        discord.update_decision(msg_id, decision, job_title=app.get("title", ""))
+        discord.update_decision(msg_id, decision, job_title=job_title)
     finally:
         discord.close()
-
-    audit("decision_recorded", app_id=app_id, decision=decision)
-    log.info("Decision recorded: app=%s decision=%s", app_id, decision)

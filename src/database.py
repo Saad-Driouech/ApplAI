@@ -370,14 +370,31 @@ def record_user_decision(
     app_id: str,
     decision: str,          # "approved" | "rejected"
     notion_page_id: Optional[str] = None,
-) -> None:
-    conn.execute(
+) -> bool:
+    """
+    Record a decision only if none exists yet.
+
+    Returns True if this call claimed the decision, False if the application
+    was already decided (or does not exist). The conditional UPDATE makes the
+    claim atomic, so concurrent button clicks cannot both succeed.
+    """
+    cursor = conn.execute(
         """
         UPDATE applications
-        SET user_decision = ?, decision_at = ?, notion_page_id = ?
-        WHERE id = ?
+        SET user_decision = ?, decision_at = ?,
+            notion_page_id = COALESCE(?, notion_page_id)
+        WHERE id = ? AND user_decision IS NULL
         """,
         (decision, _now(), notion_page_id, app_id),
+    )
+    return cursor.rowcount > 0
+
+
+def release_user_decision(conn: sqlite3.Connection, app_id: str) -> None:
+    """Undo a claimed decision so the user can retry after a failure."""
+    conn.execute(
+        "UPDATE applications SET user_decision = NULL, decision_at = NULL WHERE id = ?",
+        (app_id,),
     )
 
 

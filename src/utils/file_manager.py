@@ -63,6 +63,11 @@ def promote_to_final(
 
     Returns a dict with keys cv_path and cover_letter_path (absolute strings).
     """
+    _require_pending_dir(pending)
+    missing = [n for n in ("cv.pdf", "cover_letter.pdf") if not (pending / n).exists()]
+    if missing:
+        raise FileNotFoundError(f"Pending bundle {pending} is missing {missing}")
+
     dest = final_dir(working_dir, country, company)
     dest.mkdir(parents=True, exist_ok=True)
     names = final_filenames(candidate_name, company)
@@ -88,8 +93,15 @@ def promote_to_final(
     }
 
 
+def _require_pending_dir(pending: Path) -> None:
+    """Refuse to operate on anything that is not a `.pending/<app_id>` folder."""
+    if pending.parent.name != ".pending" or pending.is_symlink():
+        raise ValueError(f"Refusing to treat {pending} as a pending folder")
+
+
 def cleanup_pending(pending: Path) -> None:
     """Delete a pending folder and all its contents."""
+    _require_pending_dir(pending)
     if pending.exists() and pending.is_dir():
         shutil.rmtree(pending)
         log.info("Cleaned up pending folder: %s", pending)

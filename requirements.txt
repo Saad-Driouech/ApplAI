@@ -3,6 +3,10 @@
 # Run: pip install -r requirements.txt
 # Security audit: pip-audit -r requirements.txt
 
+# ── API ───────────────────────────────────────────────────────────────────
+fastapi==0.145.*
+uvicorn[standard]==0.54.*
+
 # ── HTTP / Scraping ───────────────────────────────────────────────────────
 httpx==0.27.*                  # async HTTP client (scrapers, Telegram, Notion)
 beautifulsoup4==4.12.*         # HTML parsing
