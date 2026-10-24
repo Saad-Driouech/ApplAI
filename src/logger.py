@@ -89,22 +89,21 @@ def _build_handlers(logs_dir: Path | None, debug: bool) -> list[logging.Handler]
     return handlers
 
 
-_initialized = False
-
-
 def setup(logs_dir: Path | None = None, debug: bool = False) -> None:
     """
-    Configure the root logger. Call once at application startup.
-    Subsequent calls to get_logger() will inherit this configuration.
-    """
-    global _initialized
-    if _initialized:
-        return
+    Configure the 'applai' logger. Call at application startup.
 
+    Safe to call more than once: each call replaces the previous handlers, so
+    the entrypoint's call (with logs_dir and debug from config) always takes
+    effect even though modules already created loggers at import time.
+    """
     root = logging.getLogger("applai")
     root.setLevel(logging.DEBUG)
     root.propagate = False
 
+    for h in list(root.handlers):
+        root.removeHandler(h)
+        h.close()
     for h in _build_handlers(logs_dir, debug):
         root.addHandler(h)
 
@@ -112,16 +111,15 @@ def setup(logs_dir: Path | None = None, debug: bool = False) -> None:
     for noisy in ("urllib3", "httpx", "httpcore", "google.auth"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
-    _initialized = True
-
 
 def get_logger(name: str) -> logging.Logger:
     """
     Return a child logger of the 'applai' hierarchy.
-    Always call setup() before get_logger() in production code.
+
+    Falls back to console-only output until setup() is called; setup() can
+    still be called afterwards to add file logging.
     """
-    # Auto-setup with console-only + no-debug if setup() was never called
-    if not _initialized:
+    if not logging.getLogger("applai").handlers:
         setup()
     return logging.getLogger(f"applai.{name}")
 
