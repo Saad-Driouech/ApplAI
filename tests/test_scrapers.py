@@ -1,6 +1,7 @@
-"""Tests for scraper _map_item and _infer_country methods."""
+"""Tests for scraper _map_item methods and remote location inference."""
 import pytest
 
+from src.scrapers.location import infer_remote_country
 from src.scrapers.remoteok import RemoteOKScraper
 from src.scrapers.remotive import RemotiveScraper
 from src.scrapers.arbeitnow import ArbeitnowScraper
@@ -69,45 +70,44 @@ class TestRemoteOKMapItem:
             scraper._map_item({"position": "Engineer", "company": "Co"})
 
 
-class TestRemoteOKInferCountry:
-    def test_germany(self):
-        assert RemoteOKScraper._infer_country("Germany") == "DE"
-        assert RemoteOKScraper._infer_country("Europe") == "DE"
-
-    def test_uae(self):
-        assert RemoteOKScraper._infer_country("Dubai, UAE") == "AE"
-
-    def test_saudi(self):
-        assert RemoteOKScraper._infer_country("Riyadh, Saudi Arabia") == "SA"
-
-    def test_netherlands(self):
-        assert RemoteOKScraper._infer_country("Amsterdam, Netherlands") == "NL"
-
-    def test_switzerland(self):
-        assert RemoteOKScraper._infer_country("Zurich, Switzerland") == "CH"
-
-    def test_worldwide_defaults_to_de(self):
-        assert RemoteOKScraper._infer_country("Worldwide") == "DE"
-        assert RemoteOKScraper._infer_country("") == "DE"
+    def test_city_keeps_location_requirement(self):
+        item = {"id": "3", "position": "ML Eng", "company": "Co", "url": "https://x", "location": "USA only"}
+        result = self._scraper()._map_item(item)
+        assert result["city"] == "Remote · USA only"
+        assert result["country"] == "XX"
 
 
-# ── Remotive ──────────────────────────────────────────────────────────────
+# ── Location inference (RemoteOK + Remotive) ──────────────────────────────
 
-class TestRemotiveInferCountry:
-    def test_germany(self):
-        assert RemotiveScraper._infer_country("Germany") == "DE"
-        assert RemotiveScraper._infer_country("EU") == "DE"
+class TestInferRemoteCountry:
+    @pytest.mark.parametrize("location,expected", [
+        ("Germany", "DE"),
+        ("Berlin, Germany", "DE"),
+        ("Dubai, UAE", "AE"),
+        ("UAE", "AE"),
+        ("Riyadh, Saudi Arabia", "SA"),
+        ("Amsterdam, Netherlands", "NL"),
+        ("Zurich, Switzerland", "CH"),
+        ("Doha", "QA"),
+    ])
+    def test_target_countries(self, location, expected):
+        assert infer_remote_country(location) == expected
 
-    def test_uae(self):
-        assert RemotiveScraper._infer_country("UAE") == "AE"
-        assert RemotiveScraper._infer_country("Dubai") == "AE"
+    @pytest.mark.parametrize("location", [
+        "Worldwide", "Anywhere", "Europe", "EU", "EMEA",
+        "Europe, USA, Canada, APAC",
+        "Europe, USA, UK, Canada, Switzerland",
+        "", None, "Remote", "Fully remote",
+    ])
+    def test_workable_from_home_base(self, location):
+        assert infer_remote_country(location) == "DE"
 
-    def test_saudi(self):
-        assert RemotiveScraper._infer_country("Saudi Arabia") == "SA"
-
-    def test_worldwide_defaults_to_de(self):
-        assert RemotiveScraper._infer_country("Worldwide") == "DE"
-        assert RemotiveScraper._infer_country("") == "DE"
+    @pytest.mark.parametrize("location", [
+        "USA only", "United States", "Chicago, IL", "Redwood City",
+        "Your Remote US Home Office", "Canada", "Tech hub, LATAM", "Sweden",
+    ])
+    def test_outside_targets(self, location):
+        assert infer_remote_country(location) == "XX"
 
 
 # ── Arbeitnow ─────────────────────────────────────────────────────────────

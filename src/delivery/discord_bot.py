@@ -194,7 +194,7 @@ class DiscordDelivery:
         for job in jobs[:10]:
             score = job.get("score", 0) or 0
             reason = job.get("skip_reason", "low_score") or "low_score"
-            tag = "filtered" if reason == "keyword_filter" else f"score {score:.1f}"
+            tag = {"keyword_filter": "filtered", "location": "location"}.get(reason, f"score {score:.1f}")
             url = job.get("source_url", "")
             value = f"{job.get('company', '?')} | {tag}"
             if url:

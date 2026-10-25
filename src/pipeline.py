@@ -152,6 +152,7 @@ def phase_score(cfg) -> dict:
         score_threshold=cfg.score_threshold,
         user_preferences=user_preferences,
         fallback_client=fallback_client,
+        allowed_countries=cfg.allowed_countries,
     )
     stats = scorer.run()
     log.info("Score phase complete: %s", stats)

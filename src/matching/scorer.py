@@ -84,6 +84,7 @@ class Scorer:
         batch_size: int = 50,
         user_preferences: str = "",
         fallback_client=None,
+        allowed_countries: Optional[frozenset] = None,
     ):
         self._db_path = db_path
         self._client = client
@@ -92,6 +93,7 @@ class Scorer:
         self._batch_size = batch_size
         self._user_preferences = user_preferences
         self._fallback_client = fallback_client
+        self._allowed_countries = allowed_countries
 
     def run(self) -> dict[str, int]:
         """
@@ -113,6 +115,20 @@ class Scorer:
         for row in jobs:
             job = dict(row)
             job_id = job["id"]
+
+            # ── Location pre-filter: skip jobs outside target countries ──
+            if self._allowed_countries and job.get("country") not in self._allowed_countries:
+                with db.get_conn(self._db_path) as conn:
+                    db.update_score(
+                        conn,
+                        job_id=job_id,
+                        score=0.0,
+                        reasoning=f"Auto-skipped: location outside target countries ({job.get('city') or job.get('country')})",
+                        new_status="skipped",
+                        skip_reason="location",
+                    )
+                stats["filtered"] += 1
+                continue
 
             # ── Keyword pre-filter: skip non-AI jobs without LLM call ────
             if not has_ai_keywords(job.get("title", ""), job.get("description", "")):

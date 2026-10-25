@@ -63,6 +63,22 @@ class TestScoringOutcomes:
         assert stats["quota_hit"] == 1
         assert _job_row(db_with_job)["status"] == "new"
 
+    def test_location_outside_targets_skipped_without_llm_call(self, db_with_job):
+        with db.get_conn(db_with_job) as conn:
+            conn.execute("UPDATE jobs SET country = 'XX', city = 'Remote · USA only' WHERE id = 'j1'")
+
+        class _MustNotBeCalled:
+            def score_job(self, *args, **kwargs):
+                raise AssertionError("LLM called for an out-of-target job")
+
+        stats = Scorer(
+            db_with_job, _MustNotBeCalled(), cv_summary="", allowed_countries=frozenset({"DE"}),
+        ).run()
+        assert stats["filtered"] == 1
+        with db.get_conn(db_with_job) as conn:
+            row = conn.execute("SELECT status, skip_reason FROM jobs WHERE id = 'j1'").fetchone()
+        assert tuple(row) == ("skipped", "location")
+
     def test_valid_reply_is_scored(self, db_with_job):
         stats = Scorer(db_with_job, _FakeClient('{"score": 8, "reasoning": "fit"}'), cv_summary="").run()
         assert stats["queued"] == 1
