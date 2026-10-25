@@ -114,10 +114,7 @@ class _RateLimiter:
             return max(0, self._rpd - self._day_count)
 
 
-# One limiter per (provider, model) for the whole process. Clients are built
-# per pipeline run, so per-instance counters would reset the daily budget on
-# every /score call. Counts reset on process restart; the provider's own 429
-# (mapped to BudgetExceeded) remains the authoritative backstop.
+# Process-wide limiters, so the daily budget survives clients being rebuilt per run
 _SHARED_LIMITERS: dict[tuple[str, str], _RateLimiter] = {}
 _SHARED_LIMITERS_LOCK = Lock()
 
@@ -175,13 +172,7 @@ class GeminiClient:
         return genai.Client(api_key=api_key)
 
     def _call(self, prompt: str) -> str:
-        """
-        Budget check, then the API call with retries on transient failures.
-
-        BudgetExceeded from the local limiter is never retried. A 429 that
-        survives the retries means the provider quota is exhausted and is
-        raised as BudgetExceeded so the scorer can switch to its fallback.
-        """
+        """Budget check, then the API call. A 429 that outlasts retries raises BudgetExceeded."""
         self._limiter.acquire()
         try:
             return self._generate(prompt)

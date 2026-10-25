@@ -89,7 +89,7 @@ CONTENT_FIELDS = ("title", "company", "city", "description", "salary_info")
 
 
 def normalize_content(value, field: str) -> str:
-    """Strip HTML (decoding entities once) and normalize a human-readable job field."""
+    """Strip HTML and normalize a human-readable job field."""
     return sanitize_text(strip_html(value), field, decode_html=False)
 
 

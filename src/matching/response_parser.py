@@ -1,12 +1,6 @@
 """
-Parse and validate the Tier-1 scoring LLM's reply.
-
-Shared by the Gemini, Groq, and Ollama clients so every provider gets the same
-tolerance for real-world reply shapes (markdown fences, prose around the JSON,
-<think> blocks, truncated output) — and the same refusal to invent a score.
-
-An unusable reply raises ScoreParseError. It must never become score 0.0:
-that would silently mark the job as a low-score skip.
+Parse and validate the Tier-1 scoring LLM's reply (shared by all clients).
+An unusable reply raises ScoreParseError rather than producing a score.
 """
 from __future__ import annotations
 

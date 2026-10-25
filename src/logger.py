@@ -90,13 +90,7 @@ def _build_handlers(logs_dir: Path | None, debug: bool) -> list[logging.Handler]
 
 
 def setup(logs_dir: Path | None = None, debug: bool = False) -> None:
-    """
-    Configure the 'applai' logger. Call at application startup.
-
-    Safe to call more than once: each call replaces the previous handlers, so
-    the entrypoint's call (with logs_dir and debug from config) always takes
-    effect even though modules already created loggers at import time.
-    """
+    """Configure the 'applai' logger. Each call replaces the previous handlers."""
     root = logging.getLogger("applai")
     root.setLevel(logging.DEBUG)
     root.propagate = False
@@ -113,12 +107,7 @@ def setup(logs_dir: Path | None = None, debug: bool = False) -> None:
 
 
 def get_logger(name: str) -> logging.Logger:
-    """
-    Return a child logger of the 'applai' hierarchy.
-
-    Falls back to console-only output until setup() is called; setup() can
-    still be called afterwards to add file logging.
-    """
+    """Return a child logger of 'applai'; console-only until setup() is called."""
     if not logging.getLogger("applai").handlers:
         setup()
     return logging.getLogger(f"applai.{name}")

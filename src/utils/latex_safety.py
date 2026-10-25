@@ -1,19 +1,10 @@
-r"""
-LaTeX Safety — validation, escaping, and sandboxed compilation.
+"""
+LaTeX safety: validation, escaping, and sandboxed compilation.
 
-LaTeX is Turing-complete: \write18 with shell-escape = arbitrary code
-execution, and \input / \openin can read any file the process can see
-(including /proc/self/environ, which holds every secret in the container).
-
-Two independent layers protect generated documents:
-  1. validate_tex_file() rejects file-I/O primitives and the tricks used to
-     hide them (\csname construction, ^^ character escapes, \catcode).
-  2. compile_tex() runs pdflatex with kpathsea's paranoid file access
-     (openin_any=p / openout_any=p: no absolute paths, no parent dirs, no
-     dotfiles) and a minimal environment containing no secrets — so even a
-     payload that slips past the validator cannot read anything useful.
-
-Never compile generated LaTeX any other way.
+Two independent layers: validate_tex_file() rejects file-I/O and code-execution
+primitives; compile_tex() runs pdflatex confined to its folder (paranoid
+kpathsea access) with no secrets in its environment. Always compile through
+compile_tex().
 """
 import os
 import re
@@ -25,8 +16,7 @@ from src.logger import get_logger
 
 log = get_logger(__name__)
 
-# A TeX control word ends at the first non-letter, so (?![A-Za-z]) makes
-# \include match but not \includegraphics.
+# Control words end at a non-letter; keeps \includegraphics distinct from \include
 _CMD_END = r"(?![A-Za-z])"
 
 DANGEROUS_PATTERNS = [
@@ -116,11 +106,6 @@ def compile_tex(tex_path: Path, pdflatex_bin: str = "pdflatex", timeout: int = 6
     """
     Validate, then compile *tex_path* to PDF inside its own folder.
 
-    pdflatex runs with the folder as cwd and the file passed by bare name, so
-    the paranoid openin policy confines all reads to that folder (plus the
-    system TeX tree for packages).
-
-    Returns the path of the generated PDF.
     Raises UnsafeLatexError, LatexCompileError, or subprocess.TimeoutExpired.
     """
     check = validate_tex_file(str(tex_path))

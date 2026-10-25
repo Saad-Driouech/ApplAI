@@ -34,8 +34,7 @@ def validate_input(data: dict) -> dict:
         elif not data.get(field):
             data[field] = ""
 
-    # The JD is untrusted input headed for an LLM whose output becomes LaTeX —
-    # strip prompt injection / hidden text here, not only before scoring.
+    # Untrusted JD text: sanitize before it reaches the document LLM
     jd = data.get("description") or ""
     if jd:
         from src.utils.jd_sanitizer import sanitize_jd

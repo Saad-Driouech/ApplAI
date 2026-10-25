@@ -55,9 +55,7 @@ class GroqClient:
                 max_tokens=512,
             )
         except Exception as exc:
-            # The Groq SDK already retries 429s honoring retry-after, so a 429
-            # that reaches us means the quota (RPD/TPD) is exhausted.
-            # Re-raise as BudgetExceeded so the scorer switches to its fallback.
+            # The SDK already retried 429s, so this means the quota is exhausted
             exc_type = type(exc).__name__
             if "RateLimitError" in exc_type or getattr(exc, "status_code", None) == 429:
                 raise BudgetExceeded(str(exc)) from exc

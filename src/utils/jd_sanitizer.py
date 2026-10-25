@@ -27,8 +27,7 @@ _INJECTION_PATTERNS = [
         r'(?i)when\s+(generating|creating|writing|tailoring)\s+(the\s+)?'
         r'(cv|resume|cover\s*letter)'
     ), "injection_document_manipulation"),
-    # Call shapes only, with word boundaries — plain prose like
-    # "Retrieval (RAG)" or "exec (CEO)" must not match.
+    # Call shapes only, with word boundaries, so ordinary prose doesn't match
     (re.compile(
         r'(?i)('
         r'\bsubprocess\.(run|call|Popen|check_output|check_call)\s*\(|'
@@ -59,10 +58,7 @@ def sanitize_jd(text: str) -> dict:
 
     flags = []
 
-    # 1. Strip hidden Unicode characters. Every invisible character used to
-    #    hide text (zero-width, bidi overrides, BOM, soft hyphen, tag chars)
-    #    is category Cf; control/private/unassigned chars are Cc/Co/Cn.
-    #    Visible punctuation (dashes, curly quotes, bullets) is kept.
+    # 1. Strip hidden Unicode (all invisible/control chars are category C*)
     hidden_count = 0
     clean_chars = []
     for char in text:

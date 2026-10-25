@@ -109,8 +109,7 @@ _MIGRATIONS = {
         "CREATE INDEX IF NOT EXISTS idx_jobs_dedup ON jobs(dedup_key)",
     ],
     4: [
-        # Data fix: unparseable LLM replies used to be stored as score 0 / skipped.
-        # Send those jobs back to the scoring queue.
+        # Re-queue jobs whose unparseable LLM reply was stored as score 0
         """
         UPDATE jobs
         SET status = 'new', score = NULL, score_reasoning = NULL, skip_reason = NULL
@@ -412,13 +411,7 @@ def record_user_decision(
     decision: str,          # "approved" | "rejected"
     notion_page_id: Optional[str] = None,
 ) -> bool:
-    """
-    Record a decision only if none exists yet.
-
-    Returns True if this call claimed the decision, False if the application
-    was already decided (or does not exist). The conditional UPDATE makes the
-    claim atomic, so concurrent button clicks cannot both succeed.
-    """
+    """Atomically record a decision if none exists. Returns True only for the first caller."""
     cursor = conn.execute(
         """
         UPDATE applications

@@ -9,8 +9,7 @@ Pipeline per job:
   4. Validate + compile in a sandbox via latex_safety.compile_tex()
   5. Return path to the generated PDF
 
-All inserted values (including the LLM body) are escaped as plain text, so
-the LLM output can never inject LaTeX commands into the document.
+All inserted values, including the LLM body, are LaTeX-escaped as plain text.
 
 Output: {job_folder}/cover_letter.pdf
 """
@@ -71,7 +70,7 @@ Job Description (first 2000 chars):
 
 
 def _plain_body(text: str) -> str:
-    r"""Undo LaTeX-style escapes the LLM may still emit (e.g. \%), so escaping happens once, in code."""
+    """Undo LaTeX escapes the LLM may emit, so text is escaped exactly once."""
     return re.sub(r"\\([%&#$_{}])", r"\1", text)
 
 

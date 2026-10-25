@@ -297,13 +297,7 @@ def _process_rescue(job_id: str, msg_id: str) -> None:
 
 
 def _process_decision(app_id: str, decision: str, msg_id: str) -> None:
-    """
-    Background task: update DB, files, Notion, and Discord after a button click.
-
-    Idempotent: only the first click for an application does any work. Repeated
-    clicks (double-clicks, Discord retries, Reject after Approve) never touch
-    files; they only re-sync the Discord message to the recorded decision.
-    """
+    """Background task: apply a button click. Idempotent — repeated clicks only re-sync Discord."""
     cfg = _get_cfg()
 
     with db.get_conn(cfg.paths.db_path) as conn:
