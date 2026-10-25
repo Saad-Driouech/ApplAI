@@ -32,9 +32,25 @@ class TestSanitizeText:
         assert "\x00" not in result
         assert "hello" in result
 
-    def test_escapes_html(self):
-        result = sanitize_text('<script>alert("xss")</script>', "title")
-        assert "<script>" not in result
+    def test_stores_plain_text_unescaped(self):
+        assert sanitize_text("AT&T R&D <Team> \"O'Reilly\"", "title") == "AT&T R&D <Team> \"O'Reilly\""
+
+    def test_decodes_html_entities(self):
+        assert sanitize_text("AT&amp;T &quot;Lab&quot; O&#x27;Reilly", "company") == 'AT&T "Lab" O\'Reilly'
+
+    def test_repairs_mojibake(self):
+        assert sanitize_text("Youâ\u0080\u0099ll work 8â\u0080\u009320 hrs", "title") == "You’ll work 8–20 hrs"
+
+    @pytest.mark.parametrize("text", [
+        "You’ll own “evals” — end‑to‑end • naïve café",
+        "Müller & Söhne GmbH",
+        "日本語 ＡＢＣ",
+    ])
+    def test_correct_text_unchanged(self, text):
+        assert sanitize_text(text, "title") == text
+
+    def test_strips_control_characters(self):
+        assert sanitize_text("ML​Engineer\x07", "title") == "MLEngineer"
 
     def test_non_string_returns_empty(self):
         assert sanitize_text(None, "title") == ""
@@ -104,6 +120,11 @@ class TestSanitizeJob:
         assert "<p>" not in result["description"]
         assert result["source_url"] == "https://example.com/job/1"
         assert result["country"] == "DE"
+
+    def test_double_encoded_entities_decoded(self):
+        result = sanitize_job({"title": "Fleet &amp;amp; Maintenance", "description": "<p>People &amp;amp; Culture</p>"})
+        assert result["title"] == "Fleet & Maintenance"
+        assert result["description"] == "People & Culture"
 
     def test_invalid_url_cleared(self):
         raw = {

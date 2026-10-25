@@ -204,6 +204,24 @@ class TestMigrations:
         assert rows[real_low["id"]]["status"] == "skipped"
 
 
+class TestTextMigration:
+    def test_v5_decodes_stored_text_and_recomputes_dedup_key(self):
+        conn, path = _db()
+        job = _sample_job()
+        job.update(company="AT&amp;T Labs", title="R&amp;D Engineer",
+                   description="Youâ\u0080\u0099ll build models")
+        upsert_job(conn, job)
+        conn.execute("DELETE FROM schema_meta WHERE version >= 5")
+        conn.commit()
+
+        conn = init_db(path)
+        row = conn.execute("SELECT company, title, description, dedup_key FROM jobs").fetchone()
+        assert row["company"] == "AT&T Labs"
+        assert row["title"] == "R&D Engineer"
+        assert row["description"] == "You’ll build models"
+        assert row["dedup_key"] == _compute_dedup_key("AT&T Labs", "R&D Engineer")
+
+
 class TestFeedback:
     def test_record_and_retrieve_feedback_event(self):
         import uuid

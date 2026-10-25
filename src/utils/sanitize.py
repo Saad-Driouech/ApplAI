@@ -1,10 +1,15 @@
 """
 Sanitize all data coming from external job boards.
-Prevents XSS, SQL injection, and path traversal.
+
+Text is normalized to plain Unicode and stored unescaped; each output sink
+(SQL, LaTeX, HTML) applies its own escaping. URLs are restricted to http(s).
 """
 import re
 import html
+import unicodedata
 from pathlib import PurePosixPath
+
+import ftfy
 
 LIMITS = {
     "title": 200,
@@ -21,8 +26,12 @@ def strip_html(text: str) -> str:
     """Unescape HTML entities and strip all HTML tags, leaving plain text."""
     if not isinstance(text, str):
         return ""
-    # Unescape entities first (&lt; → <, &amp; → &, etc.)
-    text = html.unescape(text)
+    # Unescape entities first; repeat for sources that double-encode them
+    for _ in range(3):
+        decoded = html.unescape(text)
+        if decoded == text:
+            break
+        text = decoded
     # Strip tags
     text = re.sub(r"<[^>]+>", " ", text)
     # Collapse whitespace
@@ -30,14 +39,25 @@ def strip_html(text: str) -> str:
     return text
 
 
-def sanitize_text(text: str, field: str) -> str:
-    """Remove dangerous content from a text field."""
+def clean_text(text: str) -> str:
+    """Repair mis-decoded UTF-8 and drop control characters; otherwise leave text unchanged."""
+    text = ftfy.fix_text(
+        text,
+        unescape_html=False,
+        uncurl_quotes=False,
+        fix_character_width=False,
+    )
+    return "".join(c for c in text if c in "\n\t" or not unicodedata.category(c).startswith("C"))
+
+
+def sanitize_text(text: str, field: str, decode_html: bool = True) -> str:
+    """Normalize a scraped text field to length-capped plain Unicode (not escaped)."""
     if not isinstance(text, str):
         return ""
-    text = text.replace("\x00", "")
-    text = html.escape(text)
+    if decode_html:
+        text = html.unescape(text)
     max_len = LIMITS.get(field, 1000)
-    return text[:max_len].strip()
+    return clean_text(text)[:max_len].strip()
 
 
 def sanitize_company_for_path(company: str) -> str:
@@ -65,16 +85,21 @@ def sanitize_url(url: str) -> str:
     return url[:2000]
 
 
+CONTENT_FIELDS = ("title", "company", "city", "description", "salary_info")
+
+
+def normalize_content(value, field: str) -> str:
+    """Strip HTML (decoding entities once) and normalize a human-readable job field."""
+    return sanitize_text(strip_html(value), field, decode_html=False)
+
+
 def sanitize_job(raw: dict) -> dict:
     """Sanitize an entire job record from a scraper."""
-    return {
+    job = {f: normalize_content(raw.get(f, ""), f) for f in CONTENT_FIELDS}
+    job.update({
         "external_id": sanitize_text(raw.get("external_id", ""), "title"),
-        "title": sanitize_text(raw.get("title", ""), "title"),
-        "company": sanitize_text(raw.get("company", ""), "company"),
-        "city": sanitize_text(raw.get("city", ""), "city"),
         "country": sanitize_text(raw.get("country", ""), "country"),
-        "description": sanitize_text(strip_html(raw.get("description", "")), "description"),
-        "salary_info": sanitize_text(raw.get("salary_info", ""), "salary_info"),
         "source_url": sanitize_url(raw.get("source_url", "")),
         "posted_at": sanitize_text(raw.get("posted_at", ""), "title"),
-    }
+    })
+    return job

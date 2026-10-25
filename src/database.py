@@ -22,7 +22,7 @@ from src.logger import get_logger
 log = get_logger(__name__)
 
 # Bump this when the schema changes.
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 _DDL = """
 PRAGMA journal_mode=WAL;
@@ -117,7 +117,36 @@ _MIGRATIONS = {
         WHERE status = 'skipped' AND score = 0 AND score_reasoning LIKE 'Parse error%'
         """,
     ],
+    5: [
+        lambda conn: _migrate_v5_normalize_text(conn),
+    ],
 }
+
+def _migrate_v5_normalize_text(conn: sqlite3.Connection) -> None:
+    """Re-normalize stored text (previously HTML-escaped) and recompute dedup keys."""
+    from src.utils.sanitize import CONTENT_FIELDS, normalize_content
+
+    updates = []
+    rows = conn.execute(
+        "SELECT id, title, company, city, description, salary_info FROM jobs"
+    ).fetchall()
+    for row in rows:
+        fixed = {f: normalize_content(row[f], f) if row[f] is not None else None for f in CONTENT_FIELDS}
+        if any(fixed[f] != row[f] for f in CONTENT_FIELDS):
+            fixed["dedup_key"] = _compute_dedup_key(fixed["company"] or "", fixed["title"] or "")
+            fixed["id"] = row["id"]
+            updates.append(fixed)
+
+    conn.executemany(
+        """
+        UPDATE jobs
+        SET title = :title, company = :company, city = :city,
+            description = :description, salary_info = :salary_info, dedup_key = :dedup_key
+        WHERE id = :id
+        """,
+        updates,
+    )
+    log.info("Normalized stored text for %d job records", len(updates))
 
 
 def _now() -> str:
@@ -181,9 +210,12 @@ def init_db(db_path: Path) -> sqlite3.Connection:
     # Run pending migrations
     for version in sorted(_MIGRATIONS.keys()):
         if version > current:
-            for sql in _MIGRATIONS[version]:
+            for step in _MIGRATIONS[version]:
+                if callable(step):
+                    step(conn)
+                    continue
                 try:
-                    conn.execute(sql)
+                    conn.execute(step)
                 except sqlite3.OperationalError as e:
                     if "duplicate column" not in str(e).lower():
                         raise

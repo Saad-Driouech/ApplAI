@@ -37,6 +37,7 @@ tenacity==8.3.*                # Retry logic for scrapers and API calls
 ratelimit==2.2.*               # Simple rate-limit decorator
 python-dateutil==2.9.*         # Flexible date parsing from job boards
 bleach==6.1.*                  # HTML sanitisation (extra layer in sanitize.py)
+ftfy==6.3.*                    # Repair mis-decoded UTF-8 in scraped text (RemoteOK)
 
 # ── Testing ───────────────────────────────────────────────────────────────
 pytest==8.2.*
