@@ -90,10 +90,10 @@ const STATUS_META = {
   approved:   { label: 'Approved',   color: '#2f9e44', bg: '#143320' },
   rejected:   { label: 'Rejected',   color: '#e03131', bg: '#3b1212' },
   skipped:    { label: 'Skipped',    color: '#495057', bg: '#1e2128' },
-  duplicate:  { label: 'Duplicate',  color: '#364fc7', bg: '#1a2050' },
+  failed:     { label: 'Failed',     color: '#c92a2a', bg: '#3b1212' },
 };
 
-const ORDER = ['new','queued','generating','ready','submitted','approved','rejected','skipped','duplicate'];
+const ORDER = ['new','queued','generating','ready','submitted','approved','rejected','skipped','failed'];
 
 async function fetchStats() {
   try {

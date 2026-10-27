@@ -228,20 +228,26 @@ def phase_generate(cfg) -> int:
         candidate_city=candidate_city,
     )
 
+    from src.utils.file_manager import cleanup_pending, pending_dir
+
     generated = 0
     with db.get_conn(cfg.paths.db_path) as conn:
+        recovered = db.recover_interrupted_generation(conn)
         jobs = db.get_jobs_by_status(conn, "queued", limit=10)
+    if recovered:
+        log.warning("Recovered %d jobs left in 'generating' by an interrupted run", recovered)
 
     for row in jobs:
         job = dict(row)
         job_id = job["id"]
         reasoning = job.get("score_reasoning", "")
+        pending = None
 
         try:
-            db.update_status_direct(cfg.paths.db_path, job_id, "generating")
+            with db.get_conn(cfg.paths.db_path) as conn:
+                db.start_generation(conn, job_id)
 
             app_id = str(uuid.uuid4())
-            from src.utils.file_manager import pending_dir
             pending = pending_dir(cfg.paths.working_dir, app_id)
             pending.mkdir(parents=True, exist_ok=True)
 
@@ -262,8 +268,12 @@ def phase_generate(cfg) -> int:
 
         except Exception as exc:
             log.error("Document generation failed for job %s: %s", job_id, exc, exc_info=True)
+            if pending is not None:
+                cleanup_pending(pending)
             with db.get_conn(cfg.paths.db_path) as conn:
-                db.update_status(conn, job_id, "queued")  # retry next cycle
+                gave_up = db.record_failure(conn, job_id, "queued", f"{type(exc).__name__}: {exc}")
+            if gave_up:
+                log.error("Giving up on job %s after %d failed attempts", job_id, db.MAX_ATTEMPTS)
 
     log.info("Generate phase complete: %d application bundles created", generated)
     return generated

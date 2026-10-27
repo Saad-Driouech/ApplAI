@@ -129,6 +129,14 @@ class TestScoringOutcomes:
         assert stats["filtered"] == 2   # both non-AI jobs handled despite the batch limit
         assert stats["deferred"] == 1   # second AI job left for the next run
 
+    def test_repeated_parse_failures_mark_job_failed(self, db_with_job):
+        for _ in range(db.MAX_ATTEMPTS):
+            Scorer(db_with_job, _FakeClient("no json here"), cv_summary="").run()
+        with db.get_conn(db_with_job) as conn:
+            row = conn.execute("SELECT status, attempts, last_error FROM jobs WHERE id = 'j1'").fetchone()
+        assert row["status"] == "failed" and row["attempts"] == db.MAX_ATTEMPTS
+        assert "ScoreParseError" in row["last_error"]
+
     def test_valid_reply_is_scored(self, db_with_job):
         stats = Scorer(db_with_job, _FakeClient('{"score": 8, "reasoning": "fit"}'), cv_summary="").run()
         assert stats["queued"] == 1

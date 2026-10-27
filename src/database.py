@@ -22,7 +22,10 @@ from src.logger import get_logger
 log = get_logger(__name__)
 
 # Bump this when the schema changes.
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
+
+# Failed attempts at the current stage (scoring or generation) before a job is marked 'failed'
+MAX_ATTEMPTS = 3
 
 _DDL = """
 PRAGMA journal_mode=WAL;
@@ -50,7 +53,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     score           REAL,                      -- Gemini score 0-10 (NULL = not yet scored)
     score_reasoning TEXT,
     status          TEXT NOT NULL DEFAULT 'new',
-                    -- new | scored | queued | generating | ready | submitted | rejected | skipped
+                    -- new | queued | generating | ready | submitted | approved | rejected | skipped | failed
     dedup_key       TEXT,                      -- normalized company+title for cross-source dedup
     UNIQUE(source, external_id)
 );
@@ -118,6 +121,11 @@ _MIGRATIONS = {
     ],
     5: [
         lambda conn: _migrate_v5_normalize_text(conn),
+    ],
+    6: [
+        "ALTER TABLE jobs ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE jobs ADD COLUMN last_error TEXT",
+        "ALTER TABLE jobs ADD COLUMN attempted_at TEXT",
     ],
 }
 
@@ -352,24 +360,65 @@ def update_score(
     new_status: str = "scored",
     skip_reason: Optional[str] = None,
 ) -> None:
+    # A completed score starts the next stage with a clean attempt count
     conn.execute(
         """
         UPDATE jobs
-        SET score = ?, score_reasoning = ?, status = ?, skip_reason = ?
+        SET score = ?, score_reasoning = ?, status = ?, skip_reason = ?,
+            attempts = 0, last_error = NULL
         WHERE id = ?
         """,
         (score, reasoning, new_status, skip_reason, job_id),
     )
 
 
+def start_generation(conn: sqlite3.Connection, job_id: str) -> None:
+    conn.execute(
+        "UPDATE jobs SET status = 'generating', attempted_at = ? WHERE id = ?",
+        (_now(), job_id),
+    )
+
+
+def record_failure(
+    conn: sqlite3.Connection,
+    job_id: str,
+    retry_status: str,
+    error: str,
+    max_attempts: int = MAX_ATTEMPTS,
+) -> bool:
+    """Count a failed attempt; mark the job 'failed' once out of attempts. Returns True if it gave up."""
+    conn.execute(
+        """
+        UPDATE jobs
+        SET attempts = attempts + 1,
+            last_error = ?,
+            status = CASE WHEN attempts + 1 >= ? THEN 'failed' ELSE ? END
+        WHERE id = ?
+        """,
+        (error[:1000], max_attempts, retry_status, job_id),
+    )
+    row = conn.execute("SELECT status FROM jobs WHERE id = ?", (job_id,)).fetchone()
+    return row is not None and row["status"] == "failed"
+
+
+def recover_interrupted_generation(
+    conn: sqlite3.Connection,
+    older_than_minutes: int = 30,
+    max_attempts: int = MAX_ATTEMPTS,
+) -> int:
+    """Count jobs stuck in 'generating' (crashed run) as a failed attempt. Returns the count."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=older_than_minutes)).isoformat()
+    stuck = conn.execute(
+        "SELECT id FROM jobs WHERE status = 'generating' AND (attempted_at IS NULL OR attempted_at < ?)",
+        (cutoff,),
+    ).fetchall()
+    for row in stuck:
+        record_failure(conn, row["id"], "queued", "Generation interrupted (process stopped)", max_attempts)
+    return len(stuck)
+
+
 def update_status(conn: sqlite3.Connection, job_id: str, status: str) -> None:
     conn.execute("UPDATE jobs SET status = ? WHERE id = ?", (status, job_id))
-
-
-def update_status_direct(db_path, job_id: str, status: str) -> None:
-    """Open a connection, update status, commit, close. Convenience for pipeline."""
-    with get_conn(db_path) as conn:
-        update_status(conn, job_id, status)
 
 
 def get_jobs_by_status(

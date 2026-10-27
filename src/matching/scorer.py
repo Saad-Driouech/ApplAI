@@ -173,6 +173,7 @@ class Scorer:
                     except Exception as fallback_exc:
                         log.error("Fallback scoring failed for job %s: %s", job_id, fallback_exc)
                         stats["errors"] += 1
+                        self._record_failure(job_id, fallback_exc)
                         continue
                 else:
                     log.warning("Quota hit, no fallback available: %s", exc)
@@ -184,6 +185,7 @@ class Scorer:
                 # Never record an unparseable reply as a score — leave the job for retry
                 log.warning("Unusable model reply for job %s: %s", job_id, exc)
                 stats["parse_errors"] += 1
+                self._record_failure(job_id, exc)
                 continue
             except Exception as exc:
                 stats["errors"] += 1
@@ -193,6 +195,7 @@ class Scorer:
                     llm_stopped = True
                     continue
                 log.error("Scoring error for job %s: %s", job_id, exc, exc_info=True)
+                self._record_failure(job_id, exc)
                 continue
 
             if not result.is_job_posting:
@@ -238,6 +241,11 @@ class Scorer:
 
         audit("scoring_run_complete", **stats)
         return stats
+
+    def _record_failure(self, job_id: str, exc: Exception) -> None:
+        with db.get_conn(self._db_path) as conn:
+            if db.record_failure(conn, job_id, "new", f"{type(exc).__name__}: {exc}"):
+                log.error("Giving up on scoring job %s after %d failed attempts", job_id, db.MAX_ATTEMPTS)
 
     def _score_one(self, job: dict) -> ScoreResult:
         """Sanitize the JD, then score it."""

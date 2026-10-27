@@ -14,7 +14,10 @@ from src.database import (
     get_recent_skipped,
     init_db,
     job_exists,
+    record_failure,
     record_feedback_event,
+    recover_interrupted_generation,
+    start_generation,
     update_score,
     update_status,
     upsert_job,
@@ -203,6 +206,47 @@ class TestExpireStaleJobs:
         assert status["old_queued"] == ("skipped", "expired")
         assert status["old_submitted"] == ("submitted", None)
         assert status["fresh_new"] == ("new", None)
+
+
+class TestAttempts:
+    def _job(self, conn, status="queued"):
+        job = _sample_job()
+        upsert_job(conn, job)
+        update_status(conn, job["id"], status)
+        return job["id"]
+
+    def _row(self, conn, job_id):
+        return conn.execute("SELECT status, attempts, last_error FROM jobs WHERE id = ?", (job_id,)).fetchone()
+
+    def test_failed_after_max_attempts(self):
+        conn, _ = _db()
+        job_id = self._job(conn)
+        assert record_failure(conn, job_id, "queued", "boom 1") is False
+        assert record_failure(conn, job_id, "queued", "boom 2") is False
+        assert tuple(self._row(conn, job_id)) == ("queued", 2, "boom 2")
+        assert record_failure(conn, job_id, "queued", "boom 3") is True
+        assert tuple(self._row(conn, job_id)) == ("failed", 3, "boom 3")
+
+    def test_successful_score_resets_attempts(self):
+        conn, _ = _db()
+        job_id = self._job(conn, status="new")
+        record_failure(conn, job_id, "new", "parse error")
+        update_score(conn, job_id, 7.0, "fit", "queued")
+        assert tuple(self._row(conn, job_id)) == ("queued", 0, None)
+
+    def test_recovers_only_stale_generating_jobs(self):
+        conn, _ = _db()
+        stale = self._job(conn)
+        start_generation(conn, stale)
+        conn.execute("UPDATE jobs SET attempted_at = '2026-01-01T00:00:00+00:00' WHERE id = ?", (stale,))
+        fresh = _sample_job(ext_id="fresh")
+        fresh["title"] = "Other"
+        upsert_job(conn, fresh)
+        start_generation(conn, fresh["id"])
+
+        assert recover_interrupted_generation(conn, older_than_minutes=30) == 1
+        assert tuple(self._row(conn, stale))[:2] == ("queued", 1)
+        assert self._row(conn, fresh["id"])["status"] == "generating"
 
 
 class TestMigrations:
