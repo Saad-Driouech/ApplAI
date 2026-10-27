@@ -106,6 +106,7 @@ class AppConfig:
         default_factory=lambda: frozenset({"DE", "SA", "AE", "CH", "QA", "NL"})
     )
     score_threshold: float = 6.0      # jobs below this score are skipped
+    job_max_age_days: int = 30        # unscored/ungenerated jobs older than this expire
     debug: bool = False
 
 
@@ -196,6 +197,7 @@ def load() -> AppConfig:
         paths=paths,
         tier1_provider=tier1_provider,
         score_threshold=float(_optional("SCORE_THRESHOLD", "6.0")),
+        job_max_age_days=int(_optional("JOB_MAX_AGE_DAYS", "30")),
         debug=_optional("APPLAI_DEBUG", "false").lower() == "true",
     )
 

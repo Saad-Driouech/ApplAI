@@ -105,7 +105,29 @@ class TestScoringOutcomes:
                 raise _ModelNotFound("model_not_found")
 
         stats = Scorer(db_with_job, _Client(), cv_summary="").run()
-        assert _Client.calls == 1 and stats["errors"] == 1
+        assert _Client.calls == 1 and stats["errors"] == 1 and stats["deferred"] == 1
+
+    def test_batch_size_limits_llm_calls_not_prefilters(self, db_with_job):
+        with db.get_conn(db_with_job) as conn:
+            for i, title in enumerate(["Data Scientist", "Accountant", "Bank Clerk"]):
+                db.upsert_job(conn, {
+                    "id": f"k{i}", "external_id": f"k{i}", "source": "test", "title": title,
+                    "company": f"Co{i}", "country": "DE", "source_url": "https://y",
+                })
+
+        class _Counting(_FakeClient):
+            calls = 0
+
+            def score_job(self, *args, **kwargs):
+                _Counting.calls += 1
+                return super().score_job(*args, **kwargs)
+
+        stats = Scorer(
+            db_with_job, _Counting('{"score": 8, "reasoning": "fit"}'), cv_summary="", batch_size=1,
+        ).run()
+        assert _Counting.calls == 1 and stats["scored"] == 1
+        assert stats["filtered"] == 2   # both non-AI jobs handled despite the batch limit
+        assert stats["deferred"] == 1   # second AI job left for the next run
 
     def test_valid_reply_is_scored(self, db_with_job):
         stats = Scorer(db_with_job, _FakeClient('{"score": 8, "reasoning": "fit"}'), cv_summary="").run()

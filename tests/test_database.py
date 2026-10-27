@@ -8,6 +8,7 @@ import pytest
 from src.database import (
     _compute_dedup_key,
     create_application,
+    expire_stale_jobs,
     get_conn,
     get_jobs_by_status,
     get_recent_skipped,
@@ -182,6 +183,26 @@ class TestCrossSourceDedup:
         upsert_job(conn, job1)
         result = upsert_job(conn, job2)
         assert result is True
+
+
+class TestExpireStaleJobs:
+    def test_expires_old_new_and_queued_only(self):
+        conn, _ = _db()
+        jobs = {name: _sample_job(ext_id=name) for name in ("old_new", "old_queued", "old_submitted", "fresh_new")}
+        for name, job in jobs.items():
+            job["title"] = name  # distinct dedup keys
+            upsert_job(conn, job)
+        update_status(conn, jobs["old_queued"]["id"], "queued")
+        update_status(conn, jobs["old_submitted"]["id"], "submitted")
+        for name in ("old_new", "old_queued", "old_submitted"):
+            conn.execute("UPDATE jobs SET scraped_at = '2026-01-01T00:00:00+00:00' WHERE id = ?", (jobs[name]["id"],))
+
+        assert expire_stale_jobs(conn, max_age_days=30) == 2
+        status = {r["title"]: (r["status"], r["skip_reason"]) for r in conn.execute("SELECT * FROM jobs")}
+        assert status["old_new"] == ("skipped", "expired")
+        assert status["old_queued"] == ("skipped", "expired")
+        assert status["old_submitted"] == ("submitted", None)
+        assert status["fresh_new"] == ("new", None)
 
 
 class TestMigrations:

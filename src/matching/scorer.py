@@ -99,20 +99,24 @@ class Scorer:
 
     def run(self) -> dict[str, int]:
         """
-        Score all 'new' jobs in the database.
-        Returns a summary dict: {scored, queued, skipped, filtered, not_a_job, errors, parse_errors, quota_hit}
+        Pre-filter every 'new' job, then LLM-score up to batch_size of them (newest first).
+        Returns a summary dict:
+        {scored, queued, skipped, filtered, not_a_job, deferred, errors, parse_errors, quota_hit}
 
-        Jobs that fail to score (errors / parse_errors) stay 'new' and are retried next run.
+        Deferred and failed jobs stay 'new' for the next run.
         """
         stats = {
             "scored": 0, "queued": 0, "skipped": 0, "filtered": 0, "not_a_job": 0,
-            "errors": 0, "parse_errors": 0, "quota_hit": 0,
+            "deferred": 0, "errors": 0, "parse_errors": 0, "quota_hit": 0,
         }
 
         with db.get_conn(self._db_path) as conn:
-            jobs = db.get_jobs_by_status(conn, "new", limit=self._batch_size)
+            jobs = db.get_jobs_by_status(conn, "new", limit=None)
 
-        log.info("Scoring batch: %d jobs to evaluate", len(jobs))
+        log.info("Scoring: %d new jobs, up to %d LLM calls", len(jobs), self._batch_size)
+
+        llm_calls = 0
+        llm_stopped = False   # quota exhausted or provider misconfigured
 
         for row in jobs:
             job = dict(row)
@@ -150,6 +154,11 @@ class Scorer:
                 )
                 continue
 
+            if llm_stopped or llm_calls >= self._batch_size:
+                stats["deferred"] += 1
+                continue
+            llm_calls += 1
+
             try:
                 result = self._score_one(job)
             except BudgetExceeded as exc:
@@ -168,7 +177,9 @@ class Scorer:
                 else:
                     log.warning("Quota hit, no fallback available: %s", exc)
                     stats["quota_hit"] += 1
-                    break
+                    stats["deferred"] += 1
+                    llm_stopped = True
+                    continue
             except ScoreParseError as exc:
                 # Never record an unparseable reply as a score — leave the job for retry
                 log.warning("Unusable model reply for job %s: %s", job_id, exc)
@@ -178,8 +189,9 @@ class Scorer:
                 stats["errors"] += 1
                 if http_status(exc) in _CONFIG_ERROR_STATUS:
                     # Bad key / removed model: every remaining job would fail the same way
-                    log.error("Scoring aborted, provider configuration error: %s", exc)
-                    break
+                    log.error("LLM scoring stopped, provider configuration error: %s", exc)
+                    llm_stopped = True
+                    continue
                 log.error("Scoring error for job %s: %s", job_id, exc, exc_info=True)
                 continue
 

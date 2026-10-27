@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Generator, Optional
 
@@ -375,12 +375,26 @@ def update_status_direct(db_path, job_id: str, status: str) -> None:
 def get_jobs_by_status(
     conn: sqlite3.Connection,
     status: str,
-    limit: int = 100,
+    limit: Optional[int] = 100,
 ) -> list[sqlite3.Row]:
+    """Best score first, then newest. limit=None returns all."""
     return conn.execute(
         "SELECT * FROM jobs WHERE status = ? ORDER BY score DESC, scraped_at DESC LIMIT ?",
-        (status, limit),
+        (status, -1 if limit is None else limit),
     ).fetchall()
+
+
+def expire_stale_jobs(conn: sqlite3.Connection, max_age_days: int) -> int:
+    """Skip 'new'/'queued' jobs scraped more than max_age_days ago. Returns the count."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat()
+    cursor = conn.execute(
+        """
+        UPDATE jobs SET status = 'skipped', skip_reason = 'expired'
+        WHERE status IN ('new', 'queued') AND scraped_at < ?
+        """,
+        (cutoff,),
+    )
+    return cursor.rowcount
 
 
 def job_exists(conn: sqlite3.Connection, source: str, external_id: str) -> bool:

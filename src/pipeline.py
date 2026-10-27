@@ -88,10 +88,20 @@ def phase_scrape(cfg) -> int:
     return total_new
 
 
+def _expire_stale(cfg) -> int:
+    with db.get_conn(cfg.paths.db_path) as conn:
+        expired = db.expire_stale_jobs(conn, cfg.job_max_age_days)
+    if expired:
+        log.info("Expired %d jobs older than %d days", expired, cfg.job_max_age_days)
+    return expired
+
+
 def phase_score(cfg) -> dict:
-    """Score all 'new' jobs via Gemini."""
+    """Expire stale jobs, then score 'new' jobs with the Tier-1 LLM."""
     from src.matching.gemini_client import GeminiClient
     from src.matching.scorer import Scorer
+
+    expired = _expire_stale(cfg)
 
     # Profile summary — used for scoring context
     profile_path = cfg.paths.working_dir / "profile_summary.md"
@@ -155,6 +165,7 @@ def phase_score(cfg) -> dict:
         allowed_countries=cfg.allowed_countries,
     )
     stats = scorer.run()
+    stats["expired"] = expired
     log.info("Score phase complete: %s", stats)
     return stats
 
@@ -168,6 +179,7 @@ def phase_generate(cfg) -> int:
     import os
 
     cleanup_stale_pending(cfg.paths.working_dir)
+    _expire_stale(cfg)
 
     # CV template
     cv_template_path = Path(os.environ.get("APPLAI_CV_TEMPLATE", ""))
@@ -333,9 +345,8 @@ def phase_deliver(cfg) -> int:
 
 def run_all(cfg) -> None:
     log.info("=== ApplAI pipeline starting ===")
-    new_jobs = phase_scrape(cfg)
-    if new_jobs > 0:
-        phase_score(cfg)
+    phase_scrape(cfg)
+    phase_score(cfg)   # always: the backlog may hold jobs from earlier runs
     phase_generate(cfg)
     phase_deliver(cfg)
     log.info("=== ApplAI pipeline complete ===")

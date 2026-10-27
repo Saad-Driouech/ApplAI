@@ -53,3 +53,10 @@ class TestConfigLoad:
         _patch_env(monkeypatch, {"SCORE_THRESHOLD": "7.5"})
         cfg = config_module.load()
         assert cfg.score_threshold == pytest.approx(7.5)
+
+    def test_job_max_age_days(self, monkeypatch):
+        _patch_env(monkeypatch, {})
+        monkeypatch.delenv("JOB_MAX_AGE_DAYS", raising=False)
+        assert config_module.load().job_max_age_days == 30
+        monkeypatch.setenv("JOB_MAX_AGE_DAYS", "45")
+        assert config_module.load().job_max_age_days == 45
