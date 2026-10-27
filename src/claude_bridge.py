@@ -113,7 +113,7 @@ def _call_groq(system_prompt: str, user_prompt: str, max_tokens: int) -> dict:
     if not api_key:
         return {"status": "error", "error": "GROQ_API_KEY is not set"}
 
-    model = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+    model = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
 
     try:
         client = Groq(api_key=api_key)

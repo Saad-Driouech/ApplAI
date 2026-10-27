@@ -87,6 +87,26 @@ class TestScoringOutcomes:
             row = conn.execute("SELECT status, skip_reason FROM jobs WHERE id = 'j1'").fetchone()
         assert tuple(row) == ("skipped", "not_a_job")
 
+    def test_config_error_aborts_batch(self, db_with_job):
+        with db.get_conn(db_with_job) as conn:
+            db.upsert_job(conn, {
+                "id": "j2", "external_id": "e2", "source": "test", "title": "Data Scientist",
+                "company": "Other", "country": "DE", "source_url": "https://y",
+            })
+
+        class _ModelNotFound(Exception):
+            status_code = 404
+
+        class _Client:
+            calls = 0
+
+            def score_job(self, *args, **kwargs):
+                _Client.calls += 1
+                raise _ModelNotFound("model_not_found")
+
+        stats = Scorer(db_with_job, _Client(), cv_summary="").run()
+        assert _Client.calls == 1 and stats["errors"] == 1
+
     def test_valid_reply_is_scored(self, db_with_job):
         stats = Scorer(db_with_job, _FakeClient('{"score": 8, "reasoning": "fit"}'), cv_summary="").run()
         assert stats["queued"] == 1

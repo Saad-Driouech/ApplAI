@@ -5,7 +5,7 @@ Uses the official Groq Python SDK. Shares ScoreResult / BudgetExceeded /
 _RateLimiter / _SCORE_PROMPT_TEMPLATE from gemini_client.py so both clients
 are drop-in replacements for each other.
 
-Free tier (llama-3.3-70b-versatile): 30 RPM, ~14,400 RPD.
+Free-tier limits vary by model: https://console.groq.com/settings/limits
 """
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ class GroqClient:
     def __init__(
         self,
         api_key: str,
-        model: str = "llama-3.3-70b-versatile",
+        model: str = "openai/gpt-oss-120b",
         rpm: int = 30,
         rpd: int = 14400,
     ):
@@ -47,12 +47,15 @@ class GroqClient:
 
     def _call(self, prompt: str) -> str:
         self._limiter.acquire()
+        # Reasoning models spend completion tokens on thinking; keep it short
+        extra = {"reasoning_effort": "low"} if self._model.startswith("openai/gpt-oss") else {}
         try:
             response = self._client.chat.completions.create(
                 model=self._model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
-                max_tokens=512,
+                max_tokens=1024,
+                **extra,
             )
         except Exception as exc:
             # The SDK already retried 429s, so this means the quota is exhausted

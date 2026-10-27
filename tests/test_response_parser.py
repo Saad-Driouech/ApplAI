@@ -29,6 +29,10 @@ class TestAcceptedShapes:
         assert result.score == 6.0
         assert "recovered" in result.reasoning
 
+    def test_truncated_json_keeps_non_job_flag(self):
+        result = parse_score_response('{"is_job_posting": false, "score": 8.5, "reasoning": "This is an ad for')
+        assert result.score == 8.5 and result.is_job_posting is False
+
     def test_score_as_numeric_string(self):
         assert parse_score_response('{"score": "8", "reasoning": "x"}').score == 8.0
 

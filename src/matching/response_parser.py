@@ -28,6 +28,7 @@ class ScoreParseError(ValueError):
 _THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 _FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
 _SCORE_FIELD = re.compile(r'"score"\s*:\s*"?(-?[0-9]+(?:\.[0-9]+)?)')
+_JOB_FLAG_FIELD = re.compile(r'"is_job_posting"\s*:\s*"?(true|false)', re.IGNORECASE)
 
 
 def parse_score_response(raw: Optional[str]) -> ScoreResult:
@@ -52,12 +53,14 @@ def parse_score_response(raw: Optional[str]) -> ScoreResult:
     match = _SCORE_FIELD.search(text)
     if not match:
         raise ScoreParseError(f"no score in model response: {raw[:200]!r}")
+    flag = _JOB_FLAG_FIELD.search(text)
     return ScoreResult(
         score=_valid_score(match.group(1)),
         reasoning="Partial model response (malformed JSON); score recovered",
         must_haves_met=[],
         gaps=[],
         raw_response=raw,
+        is_job_posting=flag is None or flag.group(1).lower() != "false",
     )
 
 

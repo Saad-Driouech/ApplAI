@@ -15,10 +15,12 @@ from typing import Optional
 
 import src.database as db
 from src.logger import audit, get_logger
-from src.matching.gemini_client import BudgetExceeded, ScoreParseError, ScoreResult
+from src.matching.gemini_client import BudgetExceeded, ScoreParseError, ScoreResult, http_status
 from src.utils.jd_sanitizer import sanitize_jd
 
 log = get_logger(__name__)
+
+_CONFIG_ERROR_STATUS = {401, 403, 404}
 
 # ── Keyword pre-filter ────────────────────────────────────────────────────
 # Jobs that mention NONE of these terms are auto-skipped before LLM scoring.
@@ -173,8 +175,12 @@ class Scorer:
                 stats["parse_errors"] += 1
                 continue
             except Exception as exc:
-                log.error("Scoring error for job %s: %s", job_id, exc, exc_info=True)
                 stats["errors"] += 1
+                if http_status(exc) in _CONFIG_ERROR_STATUS:
+                    # Bad key / removed model: every remaining job would fail the same way
+                    log.error("Scoring aborted, provider configuration error: %s", exc)
+                    break
+                log.error("Scoring error for job %s: %s", job_id, exc, exc_info=True)
                 continue
 
             if not result.is_job_posting:

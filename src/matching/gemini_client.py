@@ -41,12 +41,12 @@ Description:
 {description}
 
 ## Scoring Instructions
-Return ONLY a JSON object with exactly these keys:
+Return ONLY a JSON object with exactly these keys, in this order:
+- "is_job_posting": boolean, false if this is not an actual job vacancy (e.g. a product, article, or advertisement)
 - "score": float between 0.0 and 10.0
-- "reasoning": string of max 150 words explaining the score
+- "reasoning": string of max 100 words explaining the score
 - "must_haves_met": list of strings (key requirements the candidate satisfies)
 - "gaps": list of strings (important missing skills or experience)
-- "is_job_posting": boolean, false if this is not an actual job vacancy (e.g. a product, article, or advertisement)
 
 ## Scoring Rubric
   9-10: Near-perfect match — core stack, seniority, and domain all align
@@ -131,14 +131,14 @@ def shared_limiter(provider: str, model: str, rpm: int, rpd: int) -> _RateLimite
 _TRANSIENT_STATUS = {429, 500, 502, 503, 504}
 
 
-def _status_code(exc: BaseException) -> int | None:
+def http_status(exc: BaseException) -> int | None:
     """HTTP status of a provider SDK error (google-genai uses .code, others .status_code)."""
     code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
     return code if isinstance(code, int) else None
 
 
 def _is_transient(exc: BaseException) -> bool:
-    if _status_code(exc) in _TRANSIENT_STATUS:
+    if http_status(exc) in _TRANSIENT_STATUS:
         return True
     import httpx
     return isinstance(exc, (httpx.TransportError, TimeoutError, ConnectionError))
@@ -178,7 +178,7 @@ class GeminiClient:
         try:
             return self._generate(prompt)
         except Exception as exc:
-            if _status_code(exc) == 429:
+            if http_status(exc) == 429:
                 raise BudgetExceeded(f"Gemini quota exhausted (HTTP 429): {exc}") from exc
             raise
 

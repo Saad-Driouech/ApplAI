@@ -61,7 +61,7 @@ class AnthropicConfig:
 @dataclass(frozen=True)
 class GroqConfig:
     api_key: str = ""
-    model: str = "llama-3.3-70b-versatile"
+    model: str = "openai/gpt-oss-120b"
     requests_per_minute: int = 30
     requests_per_day: int = 14400
 
@@ -164,7 +164,7 @@ def load() -> AppConfig:
 
     groq = GroqConfig(
         api_key=_optional("GROQ_API_KEY", ""),
-        model=_optional("GROQ_MODEL", "llama-3.3-70b-versatile"),
+        model=_optional("GROQ_MODEL", "openai/gpt-oss-120b"),
         requests_per_minute=int(_optional("GROQ_RPM", "30")),
         requests_per_day=int(_optional("GROQ_RPD", "14400")),
     )
