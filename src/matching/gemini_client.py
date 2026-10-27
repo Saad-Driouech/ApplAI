@@ -46,6 +46,7 @@ Return ONLY a JSON object with exactly these keys:
 - "reasoning": string of max 150 words explaining the score
 - "must_haves_met": list of strings (key requirements the candidate satisfies)
 - "gaps": list of strings (important missing skills or experience)
+- "is_job_posting": boolean, false if this is not an actual job vacancy (e.g. a product, article, or advertisement)
 
 ## Scoring Rubric
   9-10: Near-perfect match — core stack, seniority, and domain all align

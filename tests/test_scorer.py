@@ -79,6 +79,14 @@ class TestScoringOutcomes:
             row = conn.execute("SELECT status, skip_reason FROM jobs WHERE id = 'j1'").fetchone()
         assert tuple(row) == ("skipped", "location")
 
+    def test_non_job_skipped_even_with_high_score(self, db_with_job):
+        reply = '{"score": 8, "reasoning": "AI product launch", "is_job_posting": false}'
+        stats = Scorer(db_with_job, _FakeClient(reply), cv_summary="").run()
+        assert stats["not_a_job"] == 1 and stats["queued"] == 0
+        with db.get_conn(db_with_job) as conn:
+            row = conn.execute("SELECT status, skip_reason FROM jobs WHERE id = 'j1'").fetchone()
+        assert tuple(row) == ("skipped", "not_a_job")
+
     def test_valid_reply_is_scored(self, db_with_job):
         stats = Scorer(db_with_job, _FakeClient('{"score": 8, "reasoning": "fit"}'), cv_summary="").run()
         assert stats["queued"] == 1

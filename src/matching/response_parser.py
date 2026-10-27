@@ -18,6 +18,7 @@ class ScoreResult:
     must_haves_met: list[str]
     gaps: list[str]
     raw_response: str
+    is_job_posting: bool = True
 
 
 class ScoreParseError(ValueError):
@@ -44,6 +45,7 @@ def parse_score_response(raw: Optional[str]) -> ScoreResult:
             must_haves_met=_str_list(data.get("must_haves_met")),
             gaps=_str_list(data.get("gaps")),
             raw_response=raw,
+            is_job_posting=_not_explicitly_false(data.get("is_job_posting")),
         )
 
     # Malformed or truncated JSON: accept only an explicit "score" field
@@ -82,6 +84,11 @@ def _valid_score(value: Any) -> float:
     if math.isnan(score) or not 0.0 <= score <= 10.0:
         raise ScoreParseError(f"score out of range 0-10: {score}")
     return score
+
+
+def _not_explicitly_false(value: Any) -> bool:
+    """Default to True: only an explicit false/"false" marks a non-job."""
+    return not (value is False or (isinstance(value, str) and value.strip().lower() == "false"))
 
 
 def _str_list(value: Any) -> list[str]:

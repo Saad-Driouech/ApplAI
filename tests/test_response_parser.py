@@ -32,6 +32,13 @@ class TestAcceptedShapes:
     def test_score_as_numeric_string(self):
         assert parse_score_response('{"score": "8", "reasoning": "x"}').score == 8.0
 
+    @pytest.mark.parametrize("value,expected", [
+        ("true", True), ("false", False), ('"false"', False), ('"no"', True), (None, True),
+    ])
+    def test_is_job_posting_defaults_to_true(self, value, expected):
+        field = "" if value is None else f', "is_job_posting": {value}'
+        assert parse_score_response(f'{{"score": 5{field}}}').is_job_posting is expected
+
     def test_list_fields_tolerate_strings(self):
         result = parse_score_response('{"score": 5, "must_haves_met": "Python", "gaps": null}')
         assert result.must_haves_met == ["Python"]

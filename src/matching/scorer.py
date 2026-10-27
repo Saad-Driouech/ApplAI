@@ -98,12 +98,12 @@ class Scorer:
     def run(self) -> dict[str, int]:
         """
         Score all 'new' jobs in the database.
-        Returns a summary dict: {scored, queued, skipped, filtered, errors, parse_errors, quota_hit}
+        Returns a summary dict: {scored, queued, skipped, filtered, not_a_job, errors, parse_errors, quota_hit}
 
         Jobs that fail to score (errors / parse_errors) stay 'new' and are retried next run.
         """
         stats = {
-            "scored": 0, "queued": 0, "skipped": 0, "filtered": 0,
+            "scored": 0, "queued": 0, "skipped": 0, "filtered": 0, "not_a_job": 0,
             "errors": 0, "parse_errors": 0, "quota_hit": 0,
         }
 
@@ -175,6 +175,20 @@ class Scorer:
             except Exception as exc:
                 log.error("Scoring error for job %s: %s", job_id, exc, exc_info=True)
                 stats["errors"] += 1
+                continue
+
+            if not result.is_job_posting:
+                with db.get_conn(self._db_path) as conn:
+                    db.update_score(
+                        conn,
+                        job_id=job_id,
+                        score=result.score,
+                        reasoning=result.reasoning,
+                        new_status="skipped",
+                        skip_reason="not_a_job",
+                    )
+                stats["not_a_job"] += 1
+                log.info("Not a job posting, skipped | %s @ %s", job["title"], job["company"])
                 continue
 
             above_threshold = result.score >= self._threshold
