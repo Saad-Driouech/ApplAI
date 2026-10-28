@@ -14,6 +14,8 @@ import xml.etree.ElementTree as ET
 from typing import Any
 from urllib.parse import urlencode
 
+from defusedxml.ElementTree import fromstring as safe_fromstring  # untrusted feeds
+
 from src.logger import get_logger
 from src.scrapers.base import BaseScraper, ScraperError
 
@@ -78,7 +80,7 @@ class LinkedInRssScraper(BaseScraper):
 
     def _parse_rss(self, xml_text: str) -> list[dict[str, Any]]:
         try:
-            root = ET.fromstring(xml_text)
+            root = safe_fromstring(xml_text)
         except ET.ParseError as exc:
             log.error("[linkedin-rss] XML parse error: %s", exc)
             return []
@@ -96,7 +98,7 @@ class LinkedInRssScraper(BaseScraper):
         if not url:
             raise ValueError("Missing link")
 
-        ext_id = hashlib.md5(url.encode()).hexdigest()
+        ext_id = hashlib.md5(url.encode(), usedforsecurity=False).hexdigest()
         title = item.findtext("title") or ""
 
         # LinkedIn RSS title format: "Job Title at Company (Location)"

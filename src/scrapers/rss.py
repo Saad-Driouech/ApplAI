@@ -16,6 +16,8 @@ import xml.etree.ElementTree as ET
 from typing import Any
 from urllib.parse import urlencode
 
+from defusedxml.ElementTree import fromstring as safe_fromstring  # untrusted feeds
+
 from src.logger import get_logger
 from src.scrapers.base import BaseScraper, ScraperError
 
@@ -70,7 +72,7 @@ class IndeedRssScraper(BaseScraper):
 
     def _parse_rss(self, xml_text: str) -> list[dict[str, Any]]:
         try:
-            root = ET.fromstring(xml_text)
+            root = safe_fromstring(xml_text)
         except ET.ParseError as exc:
             log.error("[indeed-rss] XML parse error: %s", exc)
             return []
@@ -88,7 +90,7 @@ class IndeedRssScraper(BaseScraper):
         if not url:
             raise ValueError("Missing link")
 
-        ext_id = hashlib.md5(url.encode()).hexdigest()
+        ext_id = hashlib.md5(url.encode(), usedforsecurity=False).hexdigest()
         title = item.findtext("title") or ""
         # Indeed RSS title format: "Job Title - Company (Location)"
         company, city = "", ""
@@ -136,7 +138,7 @@ class StepStoneRssScraper(BaseScraper):
 
     def _parse_rss(self, xml_text: str) -> list[dict[str, Any]]:
         try:
-            root = ET.fromstring(xml_text)
+            root = safe_fromstring(xml_text)
         except ET.ParseError as exc:
             log.error("[stepstone-rss] XML parse error: %s", exc)
             return []
@@ -154,7 +156,7 @@ class StepStoneRssScraper(BaseScraper):
         if not url:
             raise ValueError("Missing link")
 
-        ext_id = hashlib.md5(url.encode()).hexdigest()
+        ext_id = hashlib.md5(url.encode(), usedforsecurity=False).hexdigest()
         title = item.findtext("title") or ""
         company = item.findtext("{http://www.stepstone.de/}company") or ""
         city = item.findtext("{http://www.stepstone.de/}location") or ""
@@ -193,7 +195,7 @@ class BaytRssScraper(BaseScraper):
 
     def _parse_rss(self, xml_text: str) -> list[dict[str, Any]]:
         try:
-            root = ET.fromstring(xml_text)
+            root = safe_fromstring(xml_text)
         except ET.ParseError as exc:
             log.error("[bayt-rss] XML parse error: %s", exc)
             return []
@@ -211,7 +213,7 @@ class BaytRssScraper(BaseScraper):
         if not url:
             raise ValueError("Missing link")
 
-        ext_id = hashlib.md5(url.encode()).hexdigest()
+        ext_id = hashlib.md5(url.encode(), usedforsecurity=False).hexdigest()
         title = item.findtext("title") or ""
         # Bayt RSS title: "Job Title at Company in City, Country"
         company, city = "", ""
