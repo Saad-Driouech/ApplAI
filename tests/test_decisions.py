@@ -125,3 +125,17 @@ class TestCleanupPendingGuard:
         pending.mkdir(parents=True)
         cleanup_pending(pending)
         assert not pending.exists()
+
+
+class TestStalePendingCleanup:
+    def test_keeps_bundles_awaiting_decision(self, tmp_path):
+        import os
+        from src.utils.file_manager import cleanup_stale_pending
+
+        awaiting, orphan = pending_dir(tmp_path, "awaiting"), pending_dir(tmp_path, "orphan")
+        for folder in (awaiting, orphan):
+            folder.mkdir(parents=True)
+            os.utime(folder, (0, 0))  # far older than 72h
+
+        assert cleanup_stale_pending(tmp_path, keep={"awaiting"}) == 1
+        assert awaiting.exists() and not orphan.exists()

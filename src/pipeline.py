@@ -194,7 +194,9 @@ def phase_generate(cfg) -> int:
 
     import os
 
-    cleanup_stale_pending(cfg.paths.working_dir)
+    with db.get_conn(cfg.paths.db_path) as conn:
+        awaiting = {r["id"] for r in conn.execute("SELECT id FROM applications WHERE user_decision IS NULL")}
+    cleanup_stale_pending(cfg.paths.working_dir, keep=awaiting)
     _expire_stale(cfg)
 
     # CV template
