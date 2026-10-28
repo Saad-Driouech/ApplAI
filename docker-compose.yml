@@ -21,6 +21,10 @@ services:
       - ./src:/app/src:ro
       - ./data/db:/data/db
       - ${APPLAI_WORKING_DIR}:/mnt/job_applications
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     networks:
       - applai-net
     healthcheck:

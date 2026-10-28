@@ -15,4 +15,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src/ ./src/
 
+# Unprivileged runtime user (same UID as the n8n container)
+RUN useradd --create-home --uid 1000 applai
+USER applai
+
 CMD ["uvicorn", "src.api:app", "--host", "0.0.0.0", "--port", "8000"]
