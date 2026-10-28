@@ -196,3 +196,11 @@ class TestInferOnsiteCountry:
     ])
     def test_locations(self, location, expected):
         assert infer_onsite_country(location) == expected
+
+
+def test_arbeitnow_posted_at_is_iso():
+    from src.scrapers.arbeitnow import ArbeitnowScraper, _iso_from_epoch
+
+    item = {"slug": "ml-eng", "title": "ML Engineer", "company_name": "Acme", "location": "Berlin", "created_at": 1774341045}
+    assert ArbeitnowScraper.__new__(ArbeitnowScraper)._map_item(item)["posted_at"] == "2026-03-24T08:30:45+00:00"
+    assert _iso_from_epoch(None) == ""

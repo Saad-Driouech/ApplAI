@@ -22,7 +22,7 @@ from src.logger import get_logger
 log = get_logger(__name__)
 
 # Bump this when the schema changes.
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 # Failed attempts at the current stage (scoring or generation) before a job is marked 'failed'
 MAX_ATTEMPTS = 3
@@ -145,7 +145,21 @@ _MIGRATIONS = {
     9: [
         lambda conn: _migrate_v9_arbeitnow_country(conn),
     ],
+    10: [
+        lambda conn: _migrate_v10_arbeitnow_posted_at(conn),
+    ],
 }
+
+
+def _migrate_v10_arbeitnow_posted_at(conn: sqlite3.Connection) -> None:
+    """Convert Arbeitnow Unix-timestamp posted_at values to ISO-8601 UTC."""
+    from src.scrapers.arbeitnow import _iso_from_epoch
+
+    rows = conn.execute(
+        "SELECT id, posted_at FROM jobs WHERE source = 'arbeitnow' AND posted_at GLOB '[0-9]*' AND posted_at NOT LIKE '%-%'"
+    ).fetchall()
+    conn.executemany("UPDATE jobs SET posted_at = ? WHERE id = ?", [(_iso_from_epoch(r["posted_at"]), r["id"]) for r in rows])
+    log.info("Converted posted_at to ISO for %d Arbeitnow jobs", len(rows))
 
 
 def _migrate_v9_arbeitnow_country(conn: sqlite3.Connection) -> None:
