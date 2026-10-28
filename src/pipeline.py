@@ -400,6 +400,10 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    # Local runs: read config/.env; variables already set (e.g. by Docker) win
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).resolve().parents[1] / "config" / ".env", override=False)
+
     cfg = get_config()
     logger_module.setup(logs_dir=cfg.paths.logs_dir, debug=cfg.debug)
 
