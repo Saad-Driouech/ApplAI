@@ -51,13 +51,15 @@ _AI_KEYWORDS = {
     "wandb", "weights and biases", "dvc",
     "onnx", "triton", "tensorrt", "vllm",
     # Abbreviations commonly found in JDs
-    "ai/ml", "ml/ai", "ai ", " ai,", " ai.", "(ai)",
-    "cv/nlp", "nlp/cv", "dl ", " dl,", " dl.",
+    "ai", "ai/ml", "ml/ai", "cv/nlp", "nlp/cv", "dl",
 }
 
-# Pre-compile a single regex for speed: match any keyword as a whole word
+# One regex matching any keyword as a whole word (letter/digit boundaries,
+# so keywords containing punctuation like "ai/ml" still work)
 _AI_PATTERN = re.compile(
-    "|".join(re.escape(kw) for kw in sorted(_AI_KEYWORDS, key=len, reverse=True)),
+    r"(?<![a-z0-9])(?:"
+    + "|".join(re.escape(kw) for kw in sorted(_AI_KEYWORDS, key=len, reverse=True))
+    + r")(?![a-z0-9])",
     re.IGNORECASE,
 )
 

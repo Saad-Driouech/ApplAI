@@ -190,6 +190,14 @@ class TestHasAiKeywords:
             "Analyse von komplexen Fragestellungen im Bereich Finanzen.",
         ) is False
 
+    @pytest.mark.parametrize("title", ["Sales Manager, Dubai office", "Ajax front-end developer", "Thai cuisine chef"])
+    def test_keywords_only_match_whole_words(self, title):
+        assert has_ai_keywords(title, "") is False
+
+    @pytest.mark.parametrize("text", ["AI-powered search", "an AI startup", "AI/ML platform", "DL models"])
+    def test_ai_abbreviations_match(self, text):
+        assert has_ai_keywords("Engineer", text) is True
+
     def test_no_false_positive_training_role(self):
         """A generic 'Training Manager' role without AI context should not match."""
         assert has_ai_keywords(
