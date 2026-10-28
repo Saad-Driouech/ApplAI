@@ -45,6 +45,12 @@ _BUNDLE_EMBED = {
 }
 
 
+def _field_value(text, limit: int = 1024) -> str:
+    """Discord rejects empty embed field values and values over 1024 characters."""
+    text = str(text or "").strip() or "—"
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
 class DiscordDelivery:
     """
     Delivers application bundles to a Discord channel with interactive buttons.
@@ -203,8 +209,8 @@ class DiscordDelivery:
             if url:
                 value = f"[{job.get('company', '?')}]({url}) | {tag}"
             fields.append({
-                "name": job.get("title", "?")[:256],
-                "value": value,
+                "name": _field_value(job.get("title"), limit=256),
+                "value": _field_value(value),
                 "inline": False,
             })
 
@@ -258,18 +264,14 @@ class DiscordDelivery:
             "title": "📋 New Application Ready for Review",
             "color": _EMBED_COLOR_PENDING,
             "fields": [
-                {"name": "Position", "value": job.get("title", "—"), "inline": True},
-                {"name": "Company",  "value": job.get("company", "—"), "inline": True},
-                {"name": "Country",  "value": job.get("country", "—"), "inline": True},
+                {"name": "Position", "value": _field_value(job.get("title")), "inline": True},
+                {"name": "Company",  "value": _field_value(job.get("company")), "inline": True},
+                {"name": "Country",  "value": _field_value(job.get("country")), "inline": True},
                 {"name": "Score",    "value": f"{score:.1f} / 10", "inline": True},
-                {
-                    "name": "Job Link",
-                    "value": job.get("source_url") or "—",
-                    "inline": False,
-                },
+                {"name": "Job Link", "value": _field_value(job.get("source_url")), "inline": False},
                 {
                     "name": "Why it fits",
-                    "value": (reasoning[:500] + "…") if len(reasoning) > 500 else reasoning or "—",
+                    "value": _field_value((reasoning[:500] + "…") if len(reasoning) > 500 else reasoning),
                     "inline": False,
                 },
             ],
