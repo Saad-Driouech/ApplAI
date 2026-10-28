@@ -74,3 +74,29 @@ class TestGeminiQuota:
     def test_budgets_are_per_model(self):
         _client([SimpleNamespace(text="ok")], rpd=1, model="a")._call("prompt")
         assert _client([SimpleNamespace(text="ok")], rpd=1, model="b")._call("prompt") == "ok"
+
+
+class TestPersistentDailyBudget:
+    @pytest.fixture
+    def usage_db(self, tmp_path):
+        import src.database as db
+        path = tmp_path / "usage.db"
+        db.init_db(path)
+        return path
+
+    def test_daily_count_survives_restart(self, usage_db):
+        gc.shared_limiter("Gemini", "m", rpm=100, rpd=1, usage_db=usage_db).acquire()
+        gc._SHARED_LIMITERS.clear()  # simulate a process restart
+        with pytest.raises(BudgetExceeded):
+            gc.shared_limiter("Gemini", "m", rpm=100, rpd=1, usage_db=usage_db).acquire()
+
+    def test_budget_resets_on_new_quota_day(self, usage_db, monkeypatch):
+        limiter = gc.shared_limiter("Gemini", "m", rpm=100, rpd=1, usage_db=usage_db)
+        limiter.acquire()
+        monkeypatch.setattr(limiter, "_today", lambda: "2099-01-01")
+        limiter.acquire()  # new calendar day, fresh budget
+        assert limiter.daily_remaining == 0
+
+    def test_gemini_day_follows_pacific_time(self, usage_db):
+        assert str(gc.shared_limiter("Gemini", "m", rpm=1, rpd=1, usage_db=usage_db)._tz) == "America/Los_Angeles"
+        assert str(gc.shared_limiter("Groq", "m", rpm=1, rpd=1, usage_db=usage_db)._tz) == "UTC"

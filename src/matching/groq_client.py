@@ -9,6 +9,8 @@ Free-tier limits vary by model: https://console.groq.com/settings/limits
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from src.matching.gemini_client import (
     BudgetExceeded,
     ScoreResult,
@@ -33,6 +35,7 @@ class GroqClient:
         model: str = "openai/gpt-oss-120b",
         rpm: int = 30,
         rpd: int = 14400,
+        usage_db: Path | None = None,
     ):
         try:
             from groq import Groq
@@ -42,7 +45,7 @@ class GroqClient:
             ) from exc
 
         self._model = model
-        self._limiter = shared_limiter("Groq", model, rpm=rpm, rpd=rpd)
+        self._limiter = shared_limiter("Groq", model, rpm=rpm, rpd=rpd, usage_db=usage_db)
         self._client = Groq(api_key=api_key)
 
     def _call(self, prompt: str) -> str:

@@ -12,7 +12,10 @@ Budget tracking is in-memory; for multi-process deployments, use Redis instead.
 from __future__ import annotations
 
 import time
+from datetime import datetime
+from pathlib import Path
 from threading import Lock
+from zoneinfo import ZoneInfo
 
 from tenacity import (
     retry,
@@ -21,6 +24,7 @@ from tenacity import (
     wait_exponential,
 )
 
+import src.database as db
 from src.logger import audit, get_logger
 # Re-exported: other clients and the scorer import these from here
 from src.matching.response_parser import ScoreParseError, ScoreResult, parse_score_response
@@ -72,18 +76,41 @@ class BudgetExceeded(Exception):
     """Raised when daily or per-minute quota is exhausted."""
 
 
-class _RateLimiter:
-    """Token-bucket style limiter for RPM and RPD."""
+# Calendar day each provider's daily quota resets on
+_QUOTA_TIMEZONES = {"Gemini": "America/Los_Angeles"}
 
-    def __init__(self, rpm: int, rpd: int, name: str = "Gemini"):
+
+class _RateLimiter:
+    """RPM in memory; RPD per provider calendar day, persisted in SQLite when usage_db is set."""
+
+    def __init__(self, rpm: int, rpd: int, name: str = "Gemini", model: str = "", usage_db: Path | None = None):
         self._name = name
+        self._model = model
         self._rpm = rpm
         self._rpd = rpd
+        self._usage_db = usage_db
+        self._tz = ZoneInfo(_QUOTA_TIMEZONES.get(name, "UTC"))
         self._minute_count = 0
-        self._day_count = 0
         self._minute_reset = time.time() + 60
-        self._day_reset = time.time() + 86400
+        self._day_counts: dict[str, int] = {}  # used when usage_db is None
         self._lock = Lock()
+
+    def _today(self) -> str:
+        return datetime.now(self._tz).date().isoformat()
+
+    def _used_today(self) -> int:
+        if self._usage_db is None:
+            return self._day_counts.get(self._today(), 0)
+        with db.get_conn(self._usage_db) as conn:
+            return db.get_llm_usage(conn, self._name, self._model, self._today())
+
+    def _record_request(self) -> None:
+        day = self._today()
+        if self._usage_db is None:
+            self._day_counts = {day: self._day_counts.get(day, 0) + 1}
+            return
+        with db.get_conn(self._usage_db) as conn:
+            db.increment_llm_usage(conn, self._name, self._model, day)
 
     def acquire(self) -> None:
         with self._lock:
@@ -91,11 +118,8 @@ class _RateLimiter:
             if now >= self._minute_reset:
                 self._minute_count = 0
                 self._minute_reset = now + 60
-            if now >= self._day_reset:
-                self._day_count = 0
-                self._day_reset = now + 86400
 
-            if self._day_count >= self._rpd:
+            if self._used_today() >= self._rpd:
                 raise BudgetExceeded(
                     f"Daily {self._name} quota exhausted ({self._rpd} requests/day)"
                 )
@@ -107,24 +131,24 @@ class _RateLimiter:
                 self._minute_reset = time.time() + 60
 
             self._minute_count += 1
-            self._day_count += 1
+            self._record_request()
 
     @property
     def daily_remaining(self) -> int:
         with self._lock:
-            return max(0, self._rpd - self._day_count)
+            return max(0, self._rpd - self._used_today())
 
 
-# Process-wide limiters, so the daily budget survives clients being rebuilt per run
+# Process-wide limiters, so the per-minute budget survives clients being rebuilt per run
 _SHARED_LIMITERS: dict[tuple[str, str], _RateLimiter] = {}
 _SHARED_LIMITERS_LOCK = Lock()
 
 
-def shared_limiter(provider: str, model: str, rpm: int, rpd: int) -> _RateLimiter:
+def shared_limiter(provider: str, model: str, rpm: int, rpd: int, usage_db: Path | None = None) -> _RateLimiter:
     with _SHARED_LIMITERS_LOCK:
         key = (provider, model)
         if key not in _SHARED_LIMITERS:
-            _SHARED_LIMITERS[key] = _RateLimiter(rpm=rpm, rpd=rpd, name=provider)
+            _SHARED_LIMITERS[key] = _RateLimiter(rpm=rpm, rpd=rpd, name=provider, model=model, usage_db=usage_db)
         return _SHARED_LIMITERS[key]
 
 
@@ -156,9 +180,10 @@ class GeminiClient:
         model: str = "gemini-2.0-flash",
         rpm: int = 15,
         rpd: int = 500,
+        usage_db: Path | None = None,
     ):
         self._model = model
-        self._limiter = shared_limiter("Gemini", model, rpm=rpm, rpd=rpd)
+        self._limiter = shared_limiter("Gemini", model, rpm=rpm, rpd=rpd, usage_db=usage_db)
         self._client = self._build_client(api_key)
 
     @staticmethod

@@ -146,6 +146,7 @@ def phase_score(cfg) -> dict:
             model=cfg.groq.model,
             rpm=cfg.groq.requests_per_minute,
             rpd=cfg.groq.requests_per_day,
+            usage_db=cfg.paths.db_path,
         )
     else:
         scoring_client = GeminiClient(
@@ -153,6 +154,7 @@ def phase_score(cfg) -> dict:
             model=cfg.gemini.model,
             rpm=cfg.gemini.requests_per_minute,
             rpd=cfg.gemini.requests_per_day,
+            usage_db=cfg.paths.db_path,
         )
     # Build preference context from past decisions (if enough data)
     from src.feedback.preferences import build_preference_context

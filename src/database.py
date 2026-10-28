@@ -22,7 +22,7 @@ from src.logger import get_logger
 log = get_logger(__name__)
 
 # Bump this when the schema changes.
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 # Failed attempts at the current stage (scoring or generation) before a job is marked 'failed'
 MAX_ATTEMPTS = 3
@@ -130,6 +130,17 @@ _MIGRATIONS = {
     7: [
         # 'submitted' meant "sent to Discord for review", not applied
         "UPDATE jobs SET status = 'delivered' WHERE status = 'submitted'",
+    ],
+    8: [
+        """
+        CREATE TABLE IF NOT EXISTS llm_usage (
+            provider  TEXT NOT NULL,
+            model     TEXT NOT NULL,
+            day       TEXT NOT NULL,           -- provider's quota calendar day
+            requests  INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (provider, model, day)
+        )
+        """,
     ],
 }
 
@@ -535,6 +546,27 @@ def finish_scrape_run(
         WHERE id = ?
         """,
         (_now(), jobs_found, jobs_new, error, run_id),
+    )
+
+
+# ── LLM usage helpers ─────────────────────────────────────────────────────
+
+
+def get_llm_usage(conn: sqlite3.Connection, provider: str, model: str, day: str) -> int:
+    row = conn.execute(
+        "SELECT requests FROM llm_usage WHERE provider = ? AND model = ? AND day = ?",
+        (provider, model, day),
+    ).fetchone()
+    return row["requests"] if row else 0
+
+
+def increment_llm_usage(conn: sqlite3.Connection, provider: str, model: str, day: str) -> None:
+    conn.execute(
+        """
+        INSERT INTO llm_usage (provider, model, day, requests) VALUES (?, ?, ?, 1)
+        ON CONFLICT(provider, model, day) DO UPDATE SET requests = requests + 1
+        """,
+        (provider, model, day),
     )
 
 
