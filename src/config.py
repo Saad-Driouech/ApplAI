@@ -43,6 +43,7 @@ class DiscordConfig:
     bot_token: str
     channel_id: str
     public_key: str = ""   # from Discord Developer Portal → General Information
+    allowed_user_ids: frozenset = frozenset()   # empty = anyone in the channel may decide
 
 
 @dataclass(frozen=True)
@@ -102,6 +103,7 @@ class AppConfig:
     adzuna: AdzunaConfig
     paths: PathConfig
     tier1_provider: str        # "gemini" | "groq" | "ollama"
+    api_key: str = ""          # required on all API routes except /health and the Discord webhook
     allowed_countries: frozenset = field(
         default_factory=lambda: frozenset({"DE", "SA", "AE", "CH", "QA", "NL"})
     )
@@ -135,6 +137,9 @@ def load() -> AppConfig:
         bot_token=_require("DISCORD_BOT_TOKEN"),
         channel_id=_require("DISCORD_CHANNEL_ID"),
         public_key=_optional("DISCORD_PUBLIC_KEY", ""),
+        allowed_user_ids=frozenset(
+            uid.strip() for uid in _optional("DISCORD_ALLOWED_USER_IDS", "").split(",") if uid.strip()
+        ),
     )
 
     notion = NotionConfig(
@@ -198,6 +203,7 @@ def load() -> AppConfig:
         adzuna=adzuna,
         paths=paths,
         tier1_provider=tier1_provider,
+        api_key=_optional("APPLAI_API_KEY", ""),
         score_threshold=float(_optional("SCORE_THRESHOLD", "6.0")),
         job_max_age_days=int(_optional("JOB_MAX_AGE_DAYS", "30")),
         score_batch_size=int(_optional("SCORE_BATCH_SIZE", "50")),

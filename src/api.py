@@ -9,16 +9,21 @@ Endpoints:
   POST /discord/interactions  — Discord button interaction webhook
   GET  /health                — liveness check
   GET  /stats                 — job counts by status
+
+All routes except /health and /discord/interactions (Ed25519-verified)
+require the X-API-Key header.
 """
 from __future__ import annotations
 
 import binascii
 import json
 import os
-from datetime import datetime, timezone
+import secrets
+import time
 from pathlib import Path
+from threading import Lock
 
-from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request, Response
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
 
 import src.logger as logger_module
@@ -33,15 +38,32 @@ log = get_logger(__name__)
 app = FastAPI(title="ApplAI API", version="1.0")
 
 _cfg = None
+_cfg_lock = Lock()
+
+# Discord signs the timestamp; reject anything older to stop replays
+_INTERACTION_MAX_AGE_SECONDS = 300
 
 
 def _get_cfg():
     global _cfg
-    if _cfg is None:
-        _cfg = get_config()
-        logger_module.setup(logs_dir=_cfg.paths.logs_dir, debug=_cfg.debug)
-        db.init_db(_cfg.paths.db_path)
+    with _cfg_lock:
+        if _cfg is None:
+            cfg = get_config()
+            logger_module.setup(logs_dir=cfg.paths.logs_dir, debug=cfg.debug)
+            db.init_db(cfg.paths.db_path).close()
+            _cfg = cfg
     return _cfg
+
+
+def require_api_key(x_api_key: str | None = Header(None)) -> None:
+    expected = _get_cfg().api_key
+    if not expected:
+        raise HTTPException(status_code=503, detail="APPLAI_API_KEY is not configured")
+    if not x_api_key or not secrets.compare_digest(x_api_key.encode(), expected.encode()):
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
+
+_auth = [Depends(require_api_key)]
 
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
@@ -56,7 +78,7 @@ def health():
     return {"status": "ok"}
 
 
-@app.get("/stats")
+@app.get("/stats", dependencies=_auth)
 def stats():
     cfg = _get_cfg()
     with db.get_conn(cfg.paths.db_path) as conn:
@@ -66,7 +88,7 @@ def stats():
     return {"jobs": {row["status"]: row["count"] for row in rows}}
 
 
-@app.get("/feedback")
+@app.get("/feedback", dependencies=_auth)
 def feedback():
     """Analyze approval/rejection history, recommend threshold adjustments, and suggest keywords."""
     from src.feedback.analyzer import analyze
@@ -98,7 +120,7 @@ def feedback():
     }
 
 
-@app.get("/scrape-runs")
+@app.get("/scrape-runs", dependencies=_auth)
 def scrape_runs():
     """Return the last 30 scrape runs for the dashboard."""
     cfg = _get_cfg()
@@ -112,7 +134,7 @@ def scrape_runs():
     return {"runs": [dict(r) for r in rows]}
 
 
-@app.post("/scrape")
+@app.post("/scrape", dependencies=_auth)
 def scrape():
     cfg = _get_cfg()
     try:
@@ -124,7 +146,7 @@ def scrape():
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-@app.post("/score")
+@app.post("/score", dependencies=_auth)
 def score():
     cfg = _get_cfg()
     try:
@@ -136,7 +158,7 @@ def score():
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-@app.post("/generate")
+@app.post("/generate", dependencies=_auth)
 def generate():
     cfg = _get_cfg()
     try:
@@ -148,7 +170,7 @@ def generate():
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-@app.post("/deliver")
+@app.post("/deliver", dependencies=_auth)
 def deliver():
     cfg = _get_cfg()
     try:
@@ -160,7 +182,7 @@ def deliver():
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-@app.post("/digest")
+@app.post("/digest", dependencies=_auth)
 def digest():
     """Send a digest of recently skipped jobs to Discord for review."""
     cfg = _get_cfg()
@@ -203,15 +225,17 @@ async def discord_interactions(
     the decision in a background task.
     """
     body = await request.body()
+    cfg = _get_cfg()
 
-    public_key_hex = os.environ.get("DISCORD_PUBLIC_KEY", "")
     if not _verify_discord_signature(
-        public_key_hex,
+        cfg.discord.public_key,
         x_signature_ed25519 or "",
         x_signature_timestamp or "",
         body,
     ):
         return Response(content="Invalid request signature", status_code=401)
+    if not _timestamp_fresh(x_signature_timestamp):
+        return Response(content="Stale request timestamp", status_code=401)
 
     payload = json.loads(body)
     interaction_type = payload.get("type")
@@ -222,6 +246,11 @@ async def discord_interactions(
 
     # Type 3 — button click
     if interaction_type == 3:
+        user = payload.get("member", {}).get("user") or payload.get("user") or {}
+        if cfg.discord.allowed_user_ids and user.get("id") not in cfg.discord.allowed_user_ids:
+            # Ephemeral reply, visible only to the clicker
+            return {"type": 4, "data": {"content": "You are not allowed to decide on applications.", "flags": 64}}
+
         custom_id = payload.get("data", {}).get("custom_id", "")
         msg_id = payload.get("message", {}).get("id", "")
 
@@ -243,6 +272,13 @@ async def discord_interactions(
     return Response(content="Unhandled interaction type", status_code=400)
 
 
+def _timestamp_fresh(timestamp: str | None) -> bool:
+    try:
+        return abs(time.time() - int(timestamp)) <= _INTERACTION_MAX_AGE_SECONDS
+    except (TypeError, ValueError):
+        return False
+
+
 def _verify_discord_signature(
     public_key_hex: str, signature_hex: str, timestamp: str, body: bytes
 ) -> bool:
@@ -250,7 +286,6 @@ def _verify_discord_signature(
         return False
     try:
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-        from cryptography.exceptions import InvalidSignature
         key = Ed25519PublicKey.from_public_bytes(binascii.unhexlify(public_key_hex))
         key.verify(binascii.unhexlify(signature_hex), timestamp.encode() + body)
         return True

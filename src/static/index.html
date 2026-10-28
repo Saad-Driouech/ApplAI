@@ -95,10 +95,28 @@ const STATUS_META = {
 
 const ORDER = ['new','queued','generating','ready','submitted','approved','rejected','skipped','failed'];
 
+function storedKey() {
+  try { return localStorage.getItem('applai_api_key') || ''; } catch { return ''; }
+}
+
+// Calls the API with the X-API-Key header; asks for the key once on 401.
+async function api(path, options = {}, retried = false) {
+  const r = await fetch(path, { ...options, headers: { ...(options.headers || {}), 'X-API-Key': storedKey() } });
+  if (r.status === 401 && !retried) {
+    const key = window.prompt('ApplAI API key');
+    if (key) {
+      try { localStorage.setItem('applai_api_key', key); } catch {}
+      return api(path, options, true);
+    }
+  }
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(`${r.status} ${data.detail || r.statusText}`);
+  return data;
+}
+
 async function fetchStats() {
   try {
-    const r = await fetch('/stats');
-    const data = await r.json();
+    const data = await api('/stats');
     renderStats(data.jobs || {});
     document.getElementById('health-dot').className = 'status-dot bg-green-500';
   } catch {
@@ -124,8 +142,7 @@ function renderStats(jobs) {
 
 async function fetchScrapeRuns() {
   try {
-    const r = await fetch('/scrape-runs');
-    const data = await r.json();
+    const data = await api('/scrape-runs');
     renderScrapeRuns(data.runs || []);
   } catch {
     document.getElementById('scrape-runs').innerHTML = '<p class="text-red-400">Failed to load.</p>';
@@ -169,8 +186,7 @@ function renderScrapeRuns(runs) {
 
 async function fetchFeedback() {
   try {
-    const r = await fetch('/feedback');
-    const data = await r.json();
+    const data = await api('/feedback');
     renderFeedback(data);
   } catch {
     document.getElementById('feedback-panel').innerHTML = '<p class="text-red-400">Failed to load.</p>';
@@ -236,8 +252,7 @@ async function runPhase(phase, btn) {
   result.classList.add('hidden');
 
   try {
-    const r = await fetch(endpoint, { method: 'POST' });
-    const data = await r.json();
+    const data = await api(endpoint, { method: 'POST' });
     result.textContent = `${phase}: ${JSON.stringify(data)}`;
     result.className = 'mt-3 text-sm text-green-400';
     result.classList.remove('hidden');
@@ -262,7 +277,8 @@ function timeAgo(iso) {
 }
 
 async function refresh() {
-  await Promise.all([fetchStats(), fetchScrapeRuns(), fetchFeedback()]);
+  await fetchStats();  // first, so a missing key is prompted for only once
+  await Promise.all([fetchScrapeRuns(), fetchFeedback()]);
   document.getElementById('last-refresh').textContent = 'Updated ' + new Date().toLocaleTimeString();
 }
 

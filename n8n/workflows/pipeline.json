@@ -21,6 +21,8 @@
     {
       "parameters": {
         "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
         "url": "http://applai-api:8000/scrape",
         "options": {
           "timeout": 600000
@@ -30,11 +32,14 @@
       "name": "Scrape",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
+      "credentials": {"httpHeaderAuth": {"name": "ApplAI API key"}},
       "position": [460, 300]
     },
     {
       "parameters": {
         "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
         "url": "http://applai-api:8000/score",
         "options": {
           "timeout": 1800000
@@ -44,11 +49,14 @@
       "name": "Score",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
+      "credentials": {"httpHeaderAuth": {"name": "ApplAI API key"}},
       "position": [680, 300]
     },
     {
       "parameters": {
         "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
         "url": "http://applai-api:8000/generate",
         "options": {
           "timeout": 1800000
@@ -58,11 +66,14 @@
       "name": "Generate",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
+      "credentials": {"httpHeaderAuth": {"name": "ApplAI API key"}},
       "position": [900, 300]
     },
     {
       "parameters": {
         "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
         "url": "http://applai-api:8000/deliver",
         "options": {
           "timeout": 600000
@@ -72,6 +83,7 @@
       "name": "Deliver",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
+      "credentials": {"httpHeaderAuth": {"name": "ApplAI API key"}},
       "position": [1120, 300]
     }
   ],
