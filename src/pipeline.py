@@ -46,6 +46,9 @@ def _exclusive(phase: str):
     return decorator
 
 
+_SCRAPE_QUERY = "Machine Learning Engineer OR AI Engineer OR Applied AI Researcher OR Data Scientist"
+
+
 def _build_scrapers(cfg, db_path: Path) -> list:
     from src.scrapers.arbeitnow import ArbeitnowScraper
     from src.scrapers.remotive import RemotiveScraper
@@ -80,22 +83,12 @@ def _build_scrapers(cfg, db_path: Path) -> list:
 @_exclusive("scrape")
 def phase_scrape(cfg) -> int:
     """Run all scrapers. Returns total new jobs found."""
-    # TODO: make these configurable via env vars
-    QUERY = "Machine Learning Engineer OR AI Engineer OR Applied AI Researcher OR Data Scientist"
-    LOCATIONS = {
-        "DE": "Germany",
-        "AE": "Dubai",
-        "SA": "Riyadh",
-    }
-
     scrapers = _build_scrapers(cfg, cfg.paths.db_path)
     total_new = 0
 
+    # Only Arbeitnow uses these; the other sources filter by category or their own query
     for scraper in scrapers:
-        location = LOCATIONS.get(
-            getattr(scraper, "_country", "DE"), "Germany"
-        )
-        new_jobs = scraper.run(query=QUERY, location=location)
+        new_jobs = scraper.run(query=_SCRAPE_QUERY, location="Germany")
         total_new += len(new_jobs)
 
     log.info("Scrape phase complete: %d new jobs total", total_new)
