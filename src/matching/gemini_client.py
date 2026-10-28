@@ -220,7 +220,7 @@ class GeminiClient:
             contents=prompt,
             config=types.GenerateContentConfig(
                 temperature=0.1,
-                max_output_tokens=512,
+                max_output_tokens=2048,  # 2.5 models spend part of this on thinking
             ),
         )
         return response.text

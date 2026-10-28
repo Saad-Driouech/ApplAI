@@ -43,7 +43,7 @@ class OllamaClient:
                 "model": self._model,
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.1,
-                "max_tokens": 512,
+                "max_tokens": 1024,  # qwen3 emits <think> blocks before the JSON
             },
         )
         resp.raise_for_status()
