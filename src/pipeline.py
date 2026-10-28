@@ -22,6 +22,7 @@ Usage (from inside Docker or locally):
 from __future__ import annotations
 
 import argparse
+import functools
 import uuid
 from pathlib import Path
 
@@ -29,8 +30,20 @@ import src.database as db
 import src.logger as logger_module
 from src.config import get as get_config
 from src.logger import get_logger
+from src.utils.locks import phase_lock
 
 log = get_logger(__name__)
+
+
+def _exclusive(phase: str):
+    """Run the phase under its lock; raises PhaseBusy if another run holds it."""
+    def decorator(fn):
+        @functools.wraps(fn)
+        def wrapper(cfg, *args, **kwargs):
+            with phase_lock(cfg.paths.db_path.parent, phase):
+                return fn(cfg, *args, **kwargs)
+        return wrapper
+    return decorator
 
 
 def _build_scrapers(cfg, db_path: Path) -> list:
@@ -64,6 +77,7 @@ def _build_scrapers(cfg, db_path: Path) -> list:
     return scrapers
 
 
+@_exclusive("scrape")
 def phase_scrape(cfg) -> int:
     """Run all scrapers. Returns total new jobs found."""
     # TODO: make these configurable via env vars
@@ -96,6 +110,7 @@ def _expire_stale(cfg) -> int:
     return expired
 
 
+@_exclusive("score")
 def phase_score(cfg) -> dict:
     """Expire stale jobs, then score 'new' jobs with the Tier-1 LLM."""
     from src.matching.gemini_client import GeminiClient
@@ -170,6 +185,7 @@ def phase_score(cfg) -> dict:
     return stats
 
 
+@_exclusive("generate")
 def phase_generate(cfg) -> int:
     """Generate CV + cover letter for all 'queued' jobs."""
     from src.documents.cv_generator import CVGenerator
@@ -245,7 +261,8 @@ def phase_generate(cfg) -> int:
 
         try:
             with db.get_conn(cfg.paths.db_path) as conn:
-                db.start_generation(conn, job_id)
+                if not db.start_generation(conn, job_id):
+                    continue  # claimed elsewhere since the batch was read
 
             app_id = str(uuid.uuid4())
             pending = pending_dir(cfg.paths.working_dir, app_id)
@@ -261,7 +278,7 @@ def phase_generate(cfg) -> int:
                     "cv_path": str(cv_path),
                     "cover_letter_path": str(cl_path),
                 })
-                db.update_status(conn, job_id, "ready")
+                db.complete_stage(conn, job_id, "ready")
 
             generated += 1
             log.info("Documents generated for job %s", job_id)
@@ -279,6 +296,7 @@ def phase_generate(cfg) -> int:
     return generated
 
 
+@_exclusive("deliver")
 def phase_deliver(cfg) -> int:
     """Send ready bundles to Discord and log to Notion."""
     from src.delivery.discord_bot import DiscordDelivery
@@ -295,60 +313,65 @@ def phase_deliver(cfg) -> int:
 
     delivered = 0
     with db.get_conn(cfg.paths.db_path) as conn:
-        # Find applications whose job status is 'ready'
         rows = conn.execute("""
             SELECT a.*, j.title, j.company, j.country, j.city, j.score, j.score_reasoning,
                    j.source_url, j.id as job_id
             FROM applications a
             JOIN jobs j ON a.job_id = j.id
-            WHERE j.status = 'ready' AND a.user_decision IS NULL
+            WHERE j.status = 'ready' AND a.user_decision IS NULL AND a.discord_msg_id IS NULL
             LIMIT 10
         """).fetchall()
 
-    for row in rows:
-        app = dict(row)
-        job = {
-            "id": app["job_id"],
-            "title": app["title"],
-            "company": app["company"],
-            "country": app["country"],
-            "city": app.get("city", ""),
-            "score": app["score"],
-            "source_url": app["source_url"],
-        }
+    try:
+        for row in rows:
+            app = dict(row)
+            job_id = app["job_id"]
+            job = {
+                "id": job_id,
+                "title": app["title"],
+                "company": app["company"],
+                "country": app["country"],
+                "city": app.get("city", ""),
+                "score": app["score"],
+                "source_url": app["source_url"],
+            }
 
-        try:
-            cv_path = Path(app["cv_path"])
-            cl_path = Path(app["cover_letter_path"])
-
-            if not cv_path.exists() or not cl_path.exists():
-                log.warning("Documents missing for app %s — skipping delivery", app["id"])
+            cv_path = Path(app["cv_path"] or "")
+            cl_path = Path(app["cover_letter_path"] or "")
+            try:
+                if not cv_path.is_file() or not cl_path.is_file():
+                    raise FileNotFoundError(f"documents missing: {cv_path}, {cl_path}")
+                msg_id = discord.send_bundle(
+                    app_id=app["id"],
+                    job=job,
+                    cv_path=cv_path,
+                    cover_letter_path=cl_path,
+                    score=app["score"] or 0.0,
+                    reasoning=app["score_reasoning"] or "",
+                )
+            except Exception as exc:
+                log.error("Delivery failed for app %s: %s", app["id"], exc, exc_info=True)
+                with db.get_conn(cfg.paths.db_path) as conn:
+                    db.record_failure(conn, job_id, "ready", f"{type(exc).__name__}: {exc}")
                 continue
 
-            msg_id = discord.send_bundle(
-                app_id=app["id"],
-                job=job,
-                cv_path=cv_path,
-                cover_letter_path=cl_path,
-                score=app["score"] or 0.0,
-                reasoning=app["score_reasoning"] or "",
-            )
-
-            notion_page_id = notion.log_job(job, app)
-
+            # Record the send immediately: a later failure must never cause a re-send
             with db.get_conn(cfg.paths.db_path) as conn:
-                conn.execute(
-                    "UPDATE applications SET discord_msg_id=?, notion_page_id=? WHERE id=?",
-                    (msg_id, notion_page_id, app["id"]),
-                )
-                db.update_status(conn, app["job_id"], "submitted")
-
+                conn.execute("UPDATE applications SET discord_msg_id = ? WHERE id = ?", (msg_id, app["id"]))
+                db.complete_stage(conn, job_id, "submitted")
             delivered += 1
 
-        except Exception as exc:
-            log.error("Delivery failed for app %s: %s", app["id"], exc, exc_info=True)
+            try:
+                notion_page_id = notion.log_job(job, app)
+                with db.get_conn(cfg.paths.db_path) as conn:
+                    conn.execute(
+                        "UPDATE applications SET notion_page_id = ? WHERE id = ?", (notion_page_id, app["id"])
+                    )
+            except Exception as exc:
+                log.error("Notion logging failed for app %s (bundle already delivered): %s", app["id"], exc)
+    finally:
+        discord.close()
 
-    discord.close()
     log.info("Deliver phase complete: %d bundles sent", delivered)
     return delivered
 

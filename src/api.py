@@ -26,6 +26,7 @@ from src.config import get as get_config
 import src.database as db
 from src.logger import audit, get_logger
 from src.pipeline import phase_deliver, phase_generate, phase_score, phase_scrape
+from src.utils.locks import PhaseBusy
 
 log = get_logger(__name__)
 
@@ -117,6 +118,8 @@ def scrape():
     try:
         new_jobs = phase_scrape(cfg)
         return {"new_jobs": new_jobs}
+    except PhaseBusy as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
@@ -127,6 +130,8 @@ def score():
     try:
         stats = phase_score(cfg)
         return stats
+    except PhaseBusy as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
@@ -137,6 +142,8 @@ def generate():
     try:
         generated = phase_generate(cfg)
         return {"generated": generated}
+    except PhaseBusy as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
@@ -147,6 +154,8 @@ def deliver():
     try:
         delivered = phase_deliver(cfg)
         return {"delivered": delivered}
+    except PhaseBusy as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 

@@ -372,10 +372,20 @@ def update_score(
     )
 
 
-def start_generation(conn: sqlite3.Connection, job_id: str) -> None:
-    conn.execute(
-        "UPDATE jobs SET status = 'generating', attempted_at = ? WHERE id = ?",
+def start_generation(conn: sqlite3.Connection, job_id: str) -> bool:
+    """Atomically claim a queued job for generation. Returns False if it is no longer queued."""
+    cursor = conn.execute(
+        "UPDATE jobs SET status = 'generating', attempted_at = ? WHERE id = ? AND status = 'queued'",
         (_now(), job_id),
+    )
+    return cursor.rowcount > 0
+
+
+def complete_stage(conn: sqlite3.Connection, job_id: str, status: str) -> None:
+    """Move a job to its next status with a clean attempt count."""
+    conn.execute(
+        "UPDATE jobs SET status = ?, attempts = 0, last_error = NULL WHERE id = ?",
+        (status, job_id),
     )
 
 

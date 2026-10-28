@@ -234,6 +234,12 @@ class TestAttempts:
         update_score(conn, job_id, 7.0, "fit", "queued")
         assert tuple(self._row(conn, job_id)) == ("queued", 0, None)
 
+    def test_claim_only_succeeds_once(self):
+        conn, _ = _db()
+        job_id = self._job(conn)
+        assert start_generation(conn, job_id) is True
+        assert start_generation(conn, job_id) is False
+
     def test_recovers_only_stale_generating_jobs(self):
         conn, _ = _db()
         stale = self._job(conn)
@@ -242,6 +248,7 @@ class TestAttempts:
         fresh = _sample_job(ext_id="fresh")
         fresh["title"] = "Other"
         upsert_job(conn, fresh)
+        update_status(conn, fresh["id"], "queued")
         start_generation(conn, fresh["id"])
 
         assert recover_interrupted_generation(conn, older_than_minutes=30) == 1
