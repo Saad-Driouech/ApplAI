@@ -551,17 +551,31 @@ def record_feedback_event(
 def get_recent_skipped(
     conn: sqlite3.Connection,
     days: int = 7,
-    limit: int = 20,
+    limit: int = 10,
 ) -> list[sqlite3.Row]:
-    """Get recently skipped jobs for the digest, ordered by score descending."""
+    """Recently skipped jobs worth offering for rescue (not duplicates or expired), best score first."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     return conn.execute(
         """
         SELECT id, title, company, country, score, skip_reason, source_url
         FROM jobs
         WHERE status = 'skipped'
-          AND scraped_at >= datetime('now', ?)
+          AND COALESCE(skip_reason, '') NOT IN ('duplicate', 'expired')
+          AND scraped_at >= ?
         ORDER BY score DESC
         LIMIT ?
         """,
-        (f"-{days} days", limit),
+        (cutoff, limit),
     ).fetchall()
+
+
+def rescue_job(conn: sqlite3.Connection, job_id: str) -> bool:
+    """Atomically move a skipped job to 'queued'. Returns False if it was not skipped."""
+    cursor = conn.execute(
+        """
+        UPDATE jobs SET status = 'queued', skip_reason = NULL, attempts = 0, last_error = NULL
+        WHERE id = ? AND status = 'skipped'
+        """,
+        (job_id,),
+    )
+    return cursor.rowcount > 0

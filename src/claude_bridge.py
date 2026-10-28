@@ -8,9 +8,9 @@ as the system prompt — never via env vars, shell args, or subprocess.
 from __future__ import annotations
 
 import os
+import re
 
 MAX_JD_LENGTH = 50_000
-ALLOWED_COUNTRIES = {"DE", "SA", "AE", "CH", "QA", "NL"}
 
 
 def validate_input(data: dict) -> dict:
@@ -49,8 +49,9 @@ def validate_input(data: dict) -> dict:
         raise ValueError(f"Company name sanitises to empty: {company}")
     data["company_safe"] = safe_company[:100]
 
-    if data["country"] not in ALLOWED_COUNTRIES:
-        raise ValueError(f"Unknown country code: {data['country']}")
+    # Target countries are enforced at scoring; a rescued job may be outside them
+    if not re.fullmatch(r"[A-Z]{2}", data["country"] or ""):
+        raise ValueError(f"Invalid country code: {data['country']!r}")
 
     return data
 

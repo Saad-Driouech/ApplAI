@@ -16,6 +16,7 @@ from src.database import (
     job_exists,
     record_failure,
     record_feedback_event,
+    rescue_job,
     recover_interrupted_generation,
     start_generation,
     update_score,
@@ -332,3 +333,25 @@ class TestFeedback:
         update_score(conn, job["id"], 0.0, "No AI keywords", "skipped", skip_reason="keyword_filter")
         row = conn.execute("SELECT skip_reason FROM jobs WHERE id = ?", (job["id"],)).fetchone()
         assert row["skip_reason"] == "keyword_filter"
+
+
+class TestRescue:
+    def test_digest_excludes_duplicates_and_expired(self):
+        conn, _ = _db()
+        for reason in ("low_score", "location", "duplicate", "expired"):
+            job = _sample_job(ext_id=reason)
+            job["title"] = reason
+            upsert_job(conn, job)
+            update_score(conn, job["id"], 3.0, "x", "skipped", skip_reason=reason)
+        assert {r["skip_reason"] for r in get_recent_skipped(conn)} == {"low_score", "location"}
+
+    def test_rescue_is_atomic_and_resets_state(self):
+        conn, _ = _db()
+        job = _sample_job()
+        upsert_job(conn, job)
+        update_score(conn, job["id"], 3.0, "x", "skipped", skip_reason="location")
+        conn.execute("UPDATE jobs SET attempts = 2 WHERE id = ?", (job["id"],))
+        assert rescue_job(conn, job["id"]) is True
+        assert rescue_job(conn, job["id"]) is False  # second click: already queued
+        row = conn.execute("SELECT status, skip_reason, attempts FROM jobs").fetchone()
+        assert tuple(row) == ("queued", None, 0)

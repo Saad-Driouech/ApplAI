@@ -256,7 +256,7 @@ def phase_generate(cfg) -> int:
     for row in jobs:
         job = dict(row)
         job_id = job["id"]
-        reasoning = job.get("score_reasoning", "")
+        reasoning = job.get("score_reasoning") or ""
         pending = None
 
         try:

@@ -188,10 +188,11 @@ class DiscordDelivery:
         """
         if not jobs:
             return None
+        jobs = jobs[:10]  # one field and one button per job
 
         # Build fields — Discord embeds max 25 fields
         fields = []
-        for job in jobs[:10]:
+        for job in jobs:
             score = job.get("score", 0) or 0
             reason = job.get("skip_reason", "low_score") or "low_score"
             tag = {
@@ -209,7 +210,7 @@ class DiscordDelivery:
 
         embed = {
             "title": "Skipped Jobs Digest",
-            "description": f"{len(jobs)} recently skipped jobs. Rescue any that look relevant.",
+            "description": f"Top {len(jobs)} recently skipped jobs. Rescue any that look relevant.",
             "color": 0xFEE75C,  # yellow
             "fields": fields,
             "footer": {"text": "ApplAI Feedback Loop"},
@@ -217,7 +218,7 @@ class DiscordDelivery:
 
         # One rescue button per job (max 5 per action row, max 5 rows)
         components = []
-        for i in range(0, min(len(jobs), 10), 5):
+        for i in range(0, len(jobs), 5):
             row = {
                 "type": 1,  # ACTION_ROW
                 "components": [

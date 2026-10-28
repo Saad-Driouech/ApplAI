@@ -62,3 +62,10 @@ class TestValidateInput:
 
     def test_missing_description_ok(self):
         assert validate_input(self._job(None))["description"] == ""
+
+    def test_country_outside_targets_accepted_for_rescued_jobs(self):
+        assert validate_input(self._job("desc") | {"country": "US"})["country"] == "US"
+
+    def test_malformed_country_rejected(self):
+        with pytest.raises(ValueError):
+            validate_input(self._job("desc") | {"country": "Germany"})

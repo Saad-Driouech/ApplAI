@@ -167,7 +167,7 @@ def digest():
     from src.delivery.discord_bot import DiscordDelivery
 
     with db.get_conn(cfg.paths.db_path) as conn:
-        rows = db.get_recent_skipped(conn, days=7, limit=20)
+        rows = db.get_recent_skipped(conn, days=7)
 
     jobs = [dict(r) for r in rows]
     if not jobs:
@@ -271,12 +271,10 @@ def _process_rescue(job_id: str, msg_id: str) -> None:
         log.warning("Rescue received for unknown job_id=%s", job_id)
         return
 
-    if row["status"] != "skipped":
-        log.info("Job %s already has status '%s', skipping rescue", job_id, row["status"])
-        return
-
     with db.get_conn(cfg.paths.db_path) as conn:
-        db.update_status(conn, job_id, "queued")
+        if not db.rescue_job(conn, job_id):
+            log.info("Job %s is no longer skipped, ignoring rescue", job_id)
+            return
         db.record_feedback_event(conn, job_id, "rescue")
 
     # Update Discord message to confirm rescue

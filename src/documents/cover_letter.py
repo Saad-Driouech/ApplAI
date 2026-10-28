@@ -174,7 +174,7 @@ class CoverLetterGenerator:
             title=data["title"],
             company=data["company"],
             country=data["country"],
-            reasoning=reasoning[:1000],
+            reasoning=(reasoning or "")[:1000],
             description=(data.get("description") or "")[:2000],
         )
 
