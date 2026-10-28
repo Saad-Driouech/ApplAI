@@ -25,12 +25,6 @@ def _optional(name: str, default: str = "") -> str:
 
 
 @dataclass(frozen=True)
-class N8nConfig:
-    user: str
-    password: str
-
-
-@dataclass(frozen=True)
 class GeminiConfig:
     api_key: str
     model: str = "gemini-2.5-flash"
@@ -93,7 +87,6 @@ class PathConfig:
 
 @dataclass(frozen=True)
 class AppConfig:
-    n8n: N8nConfig
     gemini: GeminiConfig
     groq: GroqConfig
     discord: DiscordConfig
@@ -121,11 +114,6 @@ def load() -> AppConfig:
 
     Raises EnvironmentError for any missing required variable.
     """
-    n8n = N8nConfig(
-        user=_require("N8N_USER"),
-        password=_require("N8N_PASSWORD"),
-    )
-
     gemini = GeminiConfig(
         api_key=_require("GOOGLE_AI_API_KEY"),
         model=_optional("GEMINI_MODEL", "gemini-2.5-flash"),
@@ -193,7 +181,6 @@ def load() -> AppConfig:
         )
 
     return AppConfig(
-        n8n=n8n,
         gemini=gemini,
         groq=groq,
         discord=discord,

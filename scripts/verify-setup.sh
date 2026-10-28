@@ -15,10 +15,10 @@ echo ""
 # .env check
 echo "── Configuration ──"
 if [ -f .env ]; then
-    if grep -q "CHANGE_ME" .env; then
-        fail ".env has default password — change N8N_PASSWORD"
+    if grep -q "^APPLAI_API_KEY=." .env; then
+        pass "APPLAI_API_KEY set"
     else
-        pass ".env configured"
+        fail "APPLAI_API_KEY not set — API routes will refuse all requests"
     fi
     if grep -q "GOOGLE_AI_API_KEY=." .env; then
         pass "Gemini API key set"
@@ -102,5 +102,5 @@ echo "════════════════════════�
 echo "  Next steps:"
 echo "  1. Open http://localhost:5678"
 echo "  2. Test Gemini: curl with your API key"
-echo "  3. Set up Telegram + Notion in n8n"
+echo "  3. In n8n, create the \"ApplAI API key\" Header Auth credential and import n8n/workflows"
 echo "══════════════════════════════════════"
