@@ -66,19 +66,23 @@ cd applai
 
 # Configure
 cp config/.env.example config/.env
-# Edit config/.env with your API keys and paths
+# Edit config/.env with your API keys and paths, and set APPLAI_API_KEY:
+python -c "import secrets; print(secrets.token_urlsafe(32))"
 
 # Start services
-docker compose up -d
+docker compose up -d --build
 
 # Verify setup
 chmod +x scripts/verify-setup.sh
 ./scripts/verify-setup.sh
 
-# Open n8n to import the pipeline workflow
+# Open n8n, create the owner account, then add a Header Auth credential named
+# "ApplAI API key" (Name: X-API-Key, Value: your APPLAI_API_KEY) and import
+# n8n/workflows/pipeline.json via the UI
 open http://localhost:5678
-# Import n8n/workflows/pipeline.json via the UI
 ```
+
+The dashboard at http://localhost:8000 asks for the API key once and remembers it in the browser.
 
 ### Discord Setup
 
@@ -91,6 +95,8 @@ open http://localhost:5678
      ```bash
      cloudflared tunnel --url http://localhost:8000
      ```
+   - Only `/discord/interactions` (signature-verified) and `/health` work without the API key
+6. Optionally set `DISCORD_ALLOWED_USER_IDS` so only you can Approve/Reject
 
 ## Configuration
 
@@ -98,9 +104,14 @@ All configuration is via environment variables in `config/.env`. See [`config/.e
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
-| `LLM_TIER1_PROVIDER` | Scoring LLM (`gemini` or `groq`) | `gemini` |
+| `APPLAI_API_KEY` | Required `X-API-Key` for all API routes except `/health` and the Discord webhook | — |
+| `LLM_TIER1_PROVIDER` | Scoring LLM (`gemini`, `groq` or `ollama`) | `gemini` |
 | `DOCUMENT_LLM_PROVIDER` | Document generation LLM (`anthropic` or `groq`) | `anthropic` |
 | `SCORE_THRESHOLD` | Minimum score to queue a job (0-10) | `6.0` |
+| `JOB_MAX_AGE_DAYS` | Unscored/ungenerated jobs older than this expire | `30` |
+| `SCORE_BATCH_SIZE` | Max LLM scoring calls per run | `50` |
+| `GENERATE_BATCH_SIZE` | Max document bundles generated per run | `10` |
+| `DISCORD_ALLOWED_USER_IDS` | Comma-separated Discord user IDs allowed to decide | anyone |
 | `APPLAI_WORKING_DIR` | Directory for job applications and profile files | — |
 | `APPLAI_CV_TEMPLATE` | Path to your LaTeX CV template | — |
 | `APPLAI_CL_TEMPLATE` | Path to your LaTeX cover letter template | — |
@@ -125,6 +136,13 @@ All configuration is via environment variables in `config/.env`. See [`config/.e
 | `POST` | `/digest` | Send skipped jobs digest to Discord for review |
 | `GET` | `/feedback` | Approval stats, threshold recommendation, keyword suggestions |
 | `POST` | `/discord/interactions` | Discord button webhook (Approve/Reject/Rescue) |
+
+All routes except `/health` and `/discord/interactions` require the `X-API-Key` header. A phase that is already running returns `409`.
+
+### Job statuses
+
+`new` → `queued` → `generating` → `ready` → `delivered` (sent to Discord) → `approved` / `rejected`.
+Jobs leave the flow as `skipped` (with a `skip_reason`: `keyword_filter`, `location`, `low_score`, `not_a_job`, `duplicate`, `expired`) or `failed` after 3 failed attempts (see `last_error`).
 
 ## Project Structure
 
@@ -186,13 +204,14 @@ applai/
 
 - **No auto-submission** — System prepares everything; you click submit
 - **JD sanitization** — 5-stage pipeline strips prompt injection, hidden Unicode, and LaTeX exploits before any LLM sees the text
-- **LaTeX safety** — Generated `.tex` files scanned for dangerous primitives (`\write18`, `\input`, `\include`), compiled with `--no-shell-escape`
-- **Discord verification** — Ed25519 signature verification on every interaction webhook
+- **API key** — All pipeline and data routes require `X-API-Key` (constant-time compare, fails closed when unset)
+- **LaTeX safety** — Generated `.tex` files scanned for file-I/O and code-execution primitives, then compiled by a sandboxed pdflatex (paranoid file access, no secrets in its environment, `--no-shell-escape`)
+- **Discord verification** — Ed25519 signature verification, a 5-minute replay window, and an optional user allowlist
+- **Unprivileged containers** — The API runs as a non-root user with all capabilities dropped
 - **n8n hardened** — Environment variable access blocked, community packages disabled, capability drops, no-new-privileges
 - **Parameterized SQL** — All database queries use parameterized statements
 - **Localhost-only ports** — Both `8000` (API) and `5678` (n8n) bound to `127.0.0.1`
-
-See [SECURITY.md](SECURITY.md) for the full threat model and mitigation details.
+- **CI scanning** — `pip-audit`, `bandit` and `detect-secrets` run on every push
 
 ## Current Progress
 
