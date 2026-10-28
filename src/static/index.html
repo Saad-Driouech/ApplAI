@@ -95,6 +95,11 @@ const STATUS_META = {
 
 const ORDER = ['new','queued','generating','ready','delivered','approved','rejected','skipped','failed'];
 
+// Escape text before inserting it as HTML (stored job data is plain text)
+function esc(value) {
+  return String(value ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+}
+
 function storedKey() {
   try { return localStorage.getItem('applai_api_key') || ''; } catch { return ''; }
 }
@@ -135,7 +140,7 @@ function renderStats(jobs) {
     return `
       <div class="stat-card" style="border-color: ${meta.color}33">
         <div class="text-2xl font-bold" style="color: ${meta.color}">${count}</div>
-        <div class="text-xs text-slate-400 mt-1">${meta.label}</div>
+        <div class="text-xs text-slate-400 mt-1">${esc(meta.label)}</div>
       </div>`;
   }).join('');
 }
@@ -171,7 +176,7 @@ function renderScrapeRuns(runs) {
       <div class="run-row py-2.5 flex items-center justify-between">
         <div class="flex items-center gap-2">
           <span class="status-dot ${hasError ? 'bg-red-500' : 'bg-green-500'}"></span>
-          <span class="font-medium text-slate-200">${source}</span>
+          <span class="font-medium text-slate-200">${esc(source)}</span>
           <span class="text-slate-500 text-xs">${ago}</span>
         </div>
         <div class="flex items-center gap-3 text-xs">
@@ -195,14 +200,16 @@ async function fetchFeedback() {
 
 function renderFeedback(data) {
   const approvalPct = Math.round((data.overall_approval_rate || 0) * 100);
-  const thresholdColor = data.recommended_threshold > data.current_threshold ? '#f59f00' : '#2f9e44';
+  const rec = data.recommended_threshold;
+  const hasRecommendation = rec != null && rec !== data.current_threshold;
+  const thresholdColor = rec > data.current_threshold ? '#f59f00' : '#2f9e44';
 
   const keywords = (data.keyword_suggestions || []).length
-    ? data.keyword_suggestions.map(k => `<span class="tag">${k}</span>`).join('')
+    ? data.keyword_suggestions.map(k => `<span class="tag">${esc(k)}</span>`).join('')
     : '<span class="text-slate-500">None yet — rescue some skipped jobs first.</span>';
 
   const prefs = typeof data.learned_preferences === 'string' && data.learned_preferences !== 'Not enough decisions yet'
-    ? `<pre class="text-xs text-slate-300 whitespace-pre-wrap bg-slate-800 rounded-lg p-3 mt-2">${data.learned_preferences}</pre>`
+    ? `<pre class="text-xs text-slate-300 whitespace-pre-wrap bg-slate-800 rounded-lg p-3 mt-2">${esc(data.learned_preferences)}</pre>`
     : '<p class="text-slate-500 text-xs mt-1">Not enough decisions yet (need 5+).</p>';
 
   document.getElementById('feedback-panel').innerHTML = `
@@ -224,9 +231,9 @@ function renderFeedback(data) {
     <div class="flex items-center justify-between mb-4 text-xs">
       <span class="text-slate-400">Score threshold</span>
       <span>
-        <span class="text-slate-200 font-semibold">${data.current_threshold}</span>
-        ${data.recommended_threshold !== data.current_threshold
-          ? `<span class="ml-2" style="color:${thresholdColor}">→ ${data.recommended_threshold} recommended</span>`
+        <span class="text-slate-200 font-semibold">${esc(data.current_threshold)}</span>
+        ${hasRecommendation
+          ? `<span class="ml-2" style="color:${thresholdColor}">→ ${esc(rec)} recommended</span>`
           : '<span class="ml-2 text-green-400">✓ optimal</span>'}
       </span>
     </div>
