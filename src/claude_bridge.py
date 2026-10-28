@@ -119,11 +119,15 @@ def _call_groq(system_prompt: str, user_prompt: str, max_tokens: int) -> dict:
 
     model = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
 
+    # Reasoning models spend completion tokens on thinking; keep it short
+    extra = {"reasoning_effort": "low"} if model.startswith("openai/gpt-oss") else {}
+
     try:
         client = Groq(api_key=api_key)
         response = client.chat.completions.create(
             model=model,
             max_tokens=max_tokens,
+            **extra,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},

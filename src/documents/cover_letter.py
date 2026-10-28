@@ -178,7 +178,7 @@ class CoverLetterGenerator:
             description=(data.get("description") or "")[:2000],
         )
 
-        result = claude_bridge.call_api(system, user, max_tokens=1024)
+        result = claude_bridge.call_api(system, user, max_tokens=2048)
 
         if result.get("status") != "success":
             raise CoverLetterError(f"API error: {result.get('error', 'unknown')}")

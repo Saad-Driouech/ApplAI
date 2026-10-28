@@ -107,3 +107,16 @@ class TestGeneratedOutputChecks:
             client.return_value.messages.create.return_value = message
             result = claude_bridge._call_anthropic("sys", "user", 100)
         assert result["status"] == "error" and "truncated" in result["error"]
+
+    def test_groq_reasoning_model_gets_low_effort(self, monkeypatch):
+        from types import SimpleNamespace
+        from unittest import mock
+        from src import claude_bridge
+
+        monkeypatch.setenv("GROQ_API_KEY", "k")
+        monkeypatch.setenv("GROQ_MODEL", "openai/gpt-oss-120b")
+        reply = SimpleNamespace(choices=[SimpleNamespace(finish_reason="stop", message=SimpleNamespace(content="ok"))])
+        with mock.patch("groq.Groq") as client:
+            client.return_value.chat.completions.create.return_value = reply
+            assert claude_bridge._call_groq("sys", "user", 100) == {"status": "success", "output": "ok"}
+        assert client.return_value.chat.completions.create.call_args.kwargs["reasoning_effort"] == "low"
