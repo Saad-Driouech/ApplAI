@@ -68,6 +68,11 @@ class CVGenerationError(Exception):
     pass
 
 
+def _strip_fences(text: str) -> str:
+    """Remove a markdown code fence the model may wrap around the LaTeX."""
+    return re.sub(r"^```[a-zA-Z]*\s*\n|\n?```\s*$", "", text.strip()).strip()
+
+
 class CVGenerator:
     """
     Generates a tailored PDF CV for a specific job via the Anthropic API.
@@ -142,15 +147,14 @@ class CVGenerator:
             description=(data.get("description") or "")[:2000],
         )
 
-        result = claude_bridge.call_api(system, user)
+        result = claude_bridge.call_api(system, user, max_tokens=8192)
 
         if result.get("status") != "success":
             raise CVGenerationError(f"API error: {result.get('error', 'unknown')}")
 
-        output = result.get("output", "").strip()
-        if not output:
-            raise CVGenerationError("API returned empty output")
-
+        output = _strip_fences(result.get("output", ""))
+        if "\\documentclass" not in output or "\\end{document}" not in output:
+            raise CVGenerationError("API output is not a complete LaTeX document")
         return output
 
     def _copy_template_assets(self, output_dir: Path) -> None:

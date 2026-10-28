@@ -137,3 +137,15 @@ class TestCompileTex:
             with pytest.raises(UnsafeLatexError):
                 compile_tex(tex)
         run.assert_not_called()
+
+    def test_latex_error_on_final_pass_fails(self, tex):
+        from src.utils.latex_safety import LatexCompileError
+
+        def run(cmd, **kwargs):
+            tex.with_suffix(".pdf").write_bytes(b"%PDF")  # pdflatex often still writes a PDF
+            return subprocess.CompletedProcess(cmd, 1, "! Undefined control sequence.", "")
+
+        with mock.patch("src.utils.latex_safety.shutil.which", return_value="/usr/bin/pdflatex"), \
+             mock.patch("src.utils.latex_safety.subprocess.run", side_effect=run):
+            with pytest.raises(LatexCompileError, match="Undefined control sequence"):
+                compile_tex(tex)

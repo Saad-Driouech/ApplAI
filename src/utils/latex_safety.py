@@ -121,15 +121,15 @@ def compile_tex(tex_path: Path, pdflatex_bin: str = "pdflatex", timeout: int = 6
     cmd = [pdflatex_bin, "-no-shell-escape", "-interaction=nonstopmode", tex_path.name]
     env = _sandbox_env()
 
-    # Two passes for cross-references
+    # Two passes for cross-references; LaTeX errors on the final pass are fatal
     for pass_num in (1, 2):
         log.debug("pdflatex pass %d: %s", pass_num, tex_path.name)
         proc = subprocess.run(
             cmd, cwd=workdir, env=env, capture_output=True, text=True, timeout=timeout,
         )
-        if proc.returncode != 0:
-            output_tail = (proc.stdout or proc.stderr or "")[-3000:]
-            log.warning("pdflatex pass %d exited with %d:\n%s", pass_num, proc.returncode, output_tail)
+    if proc.returncode != 0:
+        output_tail = (proc.stdout or proc.stderr or "")[-1500:]
+        raise LatexCompileError(f"pdflatex exited with {proc.returncode}:\n{output_tail}")
 
     pdf_path = tex_path.with_suffix(".pdf")
     if not pdf_path.exists():

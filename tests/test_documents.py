@@ -69,3 +69,41 @@ class TestValidateInput:
     def test_malformed_country_rejected(self):
         with pytest.raises(ValueError):
             validate_input(self._job("desc") | {"country": "Germany"})
+
+
+class TestGeneratedOutputChecks:
+    def test_cv_output_fences_stripped(self, tmp_path):
+        from unittest import mock
+        from src.documents.cv_generator import CVGenerator
+
+        template = tmp_path / "cv.tex"
+        template.write_text("x")
+        gen = CVGenerator(template_path=template, output_dir=tmp_path)
+        doc = "\\documentclass{article}\\begin{document}Hi\\end{document}"
+        reply = {"status": "success", "output": f"```latex\n{doc}\n```"}
+        with mock.patch("src.claude_bridge.call_api", return_value=reply):
+            assert gen._tailor_with_api({"title": "T", "company": "C", "country": "DE"}, "") == doc
+
+    def test_incomplete_cv_rejected(self, tmp_path):
+        from unittest import mock
+        from src.documents.cv_generator import CVGenerationError, CVGenerator
+
+        template = tmp_path / "cv.tex"
+        template.write_text("x")
+        gen = CVGenerator(template_path=template, output_dir=tmp_path)
+        reply = {"status": "success", "output": "\\documentclass{article}\\begin{document}Half a CV"}
+        with mock.patch("src.claude_bridge.call_api", return_value=reply):
+            with pytest.raises(CVGenerationError):
+                gen._tailor_with_api({"title": "T", "company": "C", "country": "DE"}, "")
+
+    def test_truncated_anthropic_reply_is_an_error(self, monkeypatch):
+        from types import SimpleNamespace
+        from unittest import mock
+        from src import claude_bridge
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+        message = SimpleNamespace(stop_reason="max_tokens", content=[SimpleNamespace(type="text", text="\\documentclass")])
+        with mock.patch("anthropic.Anthropic") as client:
+            client.return_value.messages.create.return_value = message
+            result = claude_bridge._call_anthropic("sys", "user", 100)
+        assert result["status"] == "error" and "truncated" in result["error"]

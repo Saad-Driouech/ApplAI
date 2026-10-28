@@ -99,7 +99,10 @@ def _call_anthropic(system_prompt: str, user_prompt: str, max_tokens: int) -> di
             system=system_prompt,
             messages=[{"role": "user", "content": user_prompt}],
         )
-        return {"status": "success", "output": message.content[0].text}
+        if message.stop_reason == "max_tokens":
+            return {"status": "error", "error": f"Output truncated at max_tokens={max_tokens}"}
+        text = "".join(block.text for block in message.content if getattr(block, "type", "") == "text")
+        return {"status": "success", "output": text}
     except Exception as exc:
         return {"status": "error", "error": str(exc)}
 
@@ -126,6 +129,9 @@ def _call_groq(system_prompt: str, user_prompt: str, max_tokens: int) -> dict:
                 {"role": "user", "content": user_prompt},
             ],
         )
-        return {"status": "success", "output": response.choices[0].message.content}
+        choice = response.choices[0]
+        if choice.finish_reason == "length":
+            return {"status": "error", "error": f"Output truncated at max_tokens={max_tokens}"}
+        return {"status": "success", "output": choice.message.content or ""}
     except Exception as exc:
         return {"status": "error", "error": str(exc)}
