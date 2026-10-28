@@ -37,7 +37,7 @@ def env(tmp_path, monkeypatch):
     with db.get_conn(db_path) as conn:
         conn.execute(
             "INSERT INTO jobs (id, external_id, source, title, company, country, source_url, scraped_at, status) "
-            "VALUES ('j1', 'e1', 'test', 'AI Engineer', 'Acme GmbH', 'DE', 'https://x', 'now', 'submitted')"
+            "VALUES ('j1', 'e1', 'test', 'AI Engineer', 'Acme GmbH', 'DE', 'https://x', 'now', 'delivered')"
         )
         db.create_application(conn, {
             "id": app_id, "job_id": "j1",

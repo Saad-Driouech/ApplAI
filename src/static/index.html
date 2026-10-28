@@ -86,14 +86,14 @@ const STATUS_META = {
   queued:     { label: 'Queued',     color: '#e67700', bg: '#4a2800' },
   generating: { label: 'Generating', color: '#ae3ec9', bg: '#3b1350' },
   ready:      { label: 'Ready',      color: '#f59f00', bg: '#4a3300' },
-  submitted:  { label: 'Submitted',  color: '#2f9e44', bg: '#143320' },
+  delivered:  { label: 'Delivered',  color: '#2f9e44', bg: '#143320' },
   approved:   { label: 'Approved',   color: '#2f9e44', bg: '#143320' },
   rejected:   { label: 'Rejected',   color: '#e03131', bg: '#3b1212' },
   skipped:    { label: 'Skipped',    color: '#495057', bg: '#1e2128' },
   failed:     { label: 'Failed',     color: '#c92a2a', bg: '#3b1212' },
 };
 
-const ORDER = ['new','queued','generating','ready','submitted','approved','rejected','skipped','failed'];
+const ORDER = ['new','queued','generating','ready','delivered','approved','rejected','skipped','failed'];
 
 function storedKey() {
   try { return localStorage.getItem('applai_api_key') || ''; } catch { return ''; }

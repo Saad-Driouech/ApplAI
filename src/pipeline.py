@@ -361,7 +361,7 @@ def phase_deliver(cfg) -> int:
             # Record the send immediately: a later failure must never cause a re-send
             with db.get_conn(cfg.paths.db_path) as conn:
                 conn.execute("UPDATE applications SET discord_msg_id = ? WHERE id = ?", (msg_id, app["id"]))
-                db.complete_stage(conn, job_id, "submitted")
+                db.complete_stage(conn, job_id, "delivered")
             delivered += 1
 
             try:

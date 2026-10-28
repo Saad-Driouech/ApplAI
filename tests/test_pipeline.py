@@ -83,7 +83,7 @@ class TestDeliver:
             assert pipeline.phase_deliver(cfg) == 0
         discord.return_value.send_bundle.assert_called_once()
         discord.return_value.close.assert_called()
-        assert tuple(_job(cfg)) == ("submitted", 0, "m1")
+        assert tuple(_job(cfg)) == ("delivered", 0, "m1")
 
     def test_discord_failures_are_counted(self, tmp_path):
         cfg = _deliver_cfg(tmp_path)

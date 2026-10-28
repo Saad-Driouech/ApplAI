@@ -22,7 +22,7 @@ from src.logger import get_logger
 log = get_logger(__name__)
 
 # Bump this when the schema changes.
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 # Failed attempts at the current stage (scoring or generation) before a job is marked 'failed'
 MAX_ATTEMPTS = 3
@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     score           REAL,                      -- Gemini score 0-10 (NULL = not yet scored)
     score_reasoning TEXT,
     status          TEXT NOT NULL DEFAULT 'new',
-                    -- new | queued | generating | ready | submitted | approved | rejected | skipped | failed
+                    -- new | queued | generating | ready | delivered | approved | rejected | skipped | failed
     dedup_key       TEXT,                      -- normalized company+title for cross-source dedup
     UNIQUE(source, external_id)
 );
@@ -126,6 +126,10 @@ _MIGRATIONS = {
         "ALTER TABLE jobs ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE jobs ADD COLUMN last_error TEXT",
         "ALTER TABLE jobs ADD COLUMN attempted_at TEXT",
+    ],
+    7: [
+        # 'submitted' meant "sent to Discord for review", not applied
+        "UPDATE jobs SET status = 'delivered' WHERE status = 'submitted'",
     ],
 }
 
