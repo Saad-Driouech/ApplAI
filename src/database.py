@@ -22,7 +22,7 @@ from src.logger import get_logger
 log = get_logger(__name__)
 
 # Bump this when the schema changes.
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 # Failed attempts at the current stage (scoring or generation) before a job is marked 'failed'
 MAX_ATTEMPTS = 3
@@ -142,7 +142,21 @@ _MIGRATIONS = {
         )
         """,
     ],
+    9: [
+        lambda conn: _migrate_v9_arbeitnow_country(conn),
+    ],
 }
+
+
+def _migrate_v9_arbeitnow_country(conn: sqlite3.Connection) -> None:
+    """Re-derive Arbeitnow countries from the stored location (all were hardcoded DE)."""
+    from src.scrapers.location import infer_onsite_country
+
+    rows = conn.execute("SELECT id, city, country FROM jobs WHERE source = 'arbeitnow'").fetchall()
+    updates = [(infer_onsite_country(r["city"]), r["id"]) for r in rows]
+    changed = [(code, job_id) for (code, job_id), r in zip(updates, rows) if code != r["country"]]
+    conn.executemany("UPDATE jobs SET country = ? WHERE id = ?", changed)
+    log.info("Re-tagged country for %d Arbeitnow jobs", len(changed))
 
 def _migrate_v5_normalize_text(conn: sqlite3.Connection) -> None:
     """Re-normalize stored text (previously HTML-escaped) and recompute dedup keys."""

@@ -1,7 +1,7 @@
 """Tests for scraper _map_item methods and remote location inference."""
 import pytest
 
-from src.scrapers.location import infer_remote_country
+from src.scrapers.location import infer_onsite_country, infer_remote_country
 from src.scrapers.remoteok import RemoteOKScraper
 from src.scrapers.remotive import RemotiveScraper
 from src.scrapers.arbeitnow import ArbeitnowScraper
@@ -182,3 +182,17 @@ class TestAdzunaMapItem:
         scraper = self._scraper()
         with pytest.raises(ValueError, match="Missing id"):
             scraper._map_item({"title": "Engineer", "company": {"display_name": "Co"}}, "DE")
+
+
+# ── Location inference (Arbeitnow) ────────────────────────────────────────
+
+class TestInferOnsiteCountry:
+    @pytest.mark.parametrize("location,expected", [
+        ("Berlin", "DE"), ("Hösbach", "DE"), ("", "DE"), (None, "DE"), ("Remote", "DE"),
+        ("Munich, Bavaria, Germany", "DE"), ("Germany, Manchester", "DE"),
+        ("Zürich", "CH"), ("Amsterdam", "NL"),
+        ("London", "XX"), ("GB - Dundee", "XX"), ("Remote (UK hours)", "XX"),
+        ("Bicester United Kingdom", "XX"), ("Sydney, Australia", "XX"), ("Vilnius", "XX"), ("Wien", "XX"),
+    ])
+    def test_locations(self, location, expected):
+        assert infer_onsite_country(location) == expected

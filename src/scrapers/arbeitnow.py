@@ -12,6 +12,7 @@ from urllib.parse import urlencode
 
 from src.logger import get_logger
 from src.scrapers.base import BaseScraper, ScraperError
+from src.scrapers.location import infer_onsite_country
 
 log = get_logger(__name__)
 
@@ -66,7 +67,7 @@ class ArbeitnowScraper(BaseScraper):
             "title": item.get("title", ""),
             "company": item.get("company_name", ""),
             "city": item.get("location", ""),
-            "country": "DE",
+            "country": infer_onsite_country(item.get("location")),
             "salary_info": "",
             "source_url": url,
             "description": item.get("description", ""),
