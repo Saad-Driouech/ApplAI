@@ -60,3 +60,8 @@ class TestConfigLoad:
         assert config_module.load().job_max_age_days == 30
         monkeypatch.setenv("JOB_MAX_AGE_DAYS", "45")
         assert config_module.load().job_max_age_days == 45
+
+    def test_batch_sizes(self, monkeypatch):
+        _patch_env(monkeypatch, {"SCORE_BATCH_SIZE": "20", "GENERATE_BATCH_SIZE": "3"})
+        cfg = config_module.load()
+        assert (cfg.score_batch_size, cfg.generate_batch_size) == (20, 3)

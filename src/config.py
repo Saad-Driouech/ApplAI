@@ -107,6 +107,8 @@ class AppConfig:
     )
     score_threshold: float = 6.0      # jobs below this score are skipped
     job_max_age_days: int = 30        # unscored/ungenerated jobs older than this expire
+    score_batch_size: int = 50        # max LLM scoring calls per run
+    generate_batch_size: int = 10     # max document bundles generated per run
     debug: bool = False
 
 
@@ -198,6 +200,8 @@ def load() -> AppConfig:
         tier1_provider=tier1_provider,
         score_threshold=float(_optional("SCORE_THRESHOLD", "6.0")),
         job_max_age_days=int(_optional("JOB_MAX_AGE_DAYS", "30")),
+        score_batch_size=int(_optional("SCORE_BATCH_SIZE", "50")),
+        generate_batch_size=int(_optional("GENERATE_BATCH_SIZE", "10")),
         debug=_optional("APPLAI_DEBUG", "false").lower() == "true",
     )
 

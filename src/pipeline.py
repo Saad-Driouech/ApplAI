@@ -178,6 +178,7 @@ def phase_score(cfg) -> dict:
         user_preferences=user_preferences,
         fallback_client=fallback_client,
         allowed_countries=cfg.allowed_countries,
+        batch_size=cfg.score_batch_size,
     )
     stats = scorer.run()
     stats["expired"] = expired
@@ -251,7 +252,7 @@ def phase_generate(cfg) -> int:
     generated = 0
     with db.get_conn(cfg.paths.db_path) as conn:
         recovered = db.recover_interrupted_generation(conn)
-        jobs = db.get_jobs_by_status(conn, "queued", limit=10)
+        jobs = db.get_jobs_by_status(conn, "queued", limit=cfg.generate_batch_size)
     if recovered:
         log.warning("Recovered %d jobs left in 'generating' by an interrupted run", recovered)
 

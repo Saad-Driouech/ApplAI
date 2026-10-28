@@ -14,7 +14,8 @@ def test_generation_gives_up_after_max_attempts(tmp_path, monkeypatch):
     monkeypatch.setenv("APPLAI_CV_TEMPLATE", str(tmp_path / "cv.tex"))
     monkeypatch.setenv("APPLAI_CL_TEMPLATE", str(tmp_path / "cl.tex"))
     cfg = SimpleNamespace(
-        paths=SimpleNamespace(db_path=tmp_path / "t.db", working_dir=tmp_path), job_max_age_days=30,
+        paths=SimpleNamespace(db_path=tmp_path / "t.db", working_dir=tmp_path),
+        job_max_age_days=30, generate_batch_size=10,
     )
     db.init_db(cfg.paths.db_path)
     with db.get_conn(cfg.paths.db_path) as conn:
