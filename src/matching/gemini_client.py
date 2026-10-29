@@ -40,7 +40,7 @@ You are a job-fit evaluator for an AI/ML professional. Score how well the candid
 ## Job Posting
 Title: {title}
 Company: {company}
-Country: {country}
+Location: {location}
 Description:
 {description}
 
@@ -66,10 +66,34 @@ even if not every listed requirement is met. Transferable ML skills matter.
 nice-to-haves (specific cloud certifications, niche domain knowledge).
 - Years-of-experience requirements are soft guidelines, not hard cutoffs. \
 Strong demonstrated skills can compensate for fewer years.
-- Visa/work-authorization mismatches are a real blocker — penalize heavily.
+- Location eligibility is a hard blocker: if the posting restricts where the candidate must \
+live or be authorized to work (e.g. "Remote - USA/Canada", "must be US-based", "UK residents only") \
+and the candidate's profile does not meet it, score 0-2 and say so in the reasoning. Remote roles \
+open worldwide or in Europe/EMEA are eligible.
 - "Preferred" or "nice to have" requirements should NOT lower the score significantly.
 - Return raw JSON, no markdown fences.
 {user_preferences}"""
+
+
+def _location_text(job: dict) -> str:
+    """Location as stated by the source; never an assumed country for remote roles."""
+    city = (job.get("city") or "").strip()
+    country = job.get("country") or ""
+    if country == "REMOTE":
+        return city if city.lower() != "remote" else "Remote (no location requirement stated in the listing)"
+    return ", ".join(part for part in (city, country) if part)
+
+
+def build_score_prompt(job: dict, cv_summary: str, user_preferences: str = "") -> str:
+    """Scoring prompt shared by all Tier-1 clients."""
+    return _SCORE_PROMPT_TEMPLATE.format(
+        cv_summary=cv_summary,
+        title=job.get("title", ""),
+        company=job.get("company", ""),
+        location=_location_text(job),
+        description=(job.get("description") or "")[:3000],
+        user_preferences=user_preferences,
+    )
 
 
 class BudgetExceeded(Exception):
@@ -242,14 +266,7 @@ class GeminiClient:
         Returns:
             ScoreResult with score (0-10), reasoning, must_haves_met, gaps
         """
-        prompt = _SCORE_PROMPT_TEMPLATE.format(
-            cv_summary=cv_summary,
-            title=job.get("title", ""),
-            company=job.get("company", ""),
-            country=job.get("country", ""),
-            description=(job.get("description") or "")[:3000],  # cap at 3k chars
-            user_preferences=user_preferences,
-        )
+        prompt = build_score_prompt(job, cv_summary, user_preferences)
 
         try:
             raw = self._call(prompt)

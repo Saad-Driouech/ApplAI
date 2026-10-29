@@ -320,6 +320,20 @@ class TestArbeitnowCountryMigration:
         assert dict(conn.execute("SELECT city, country FROM jobs").fetchall()) == {"London": "XX", "Berlin": "DE"}
 
 
+class TestRemoteCountryMigration:
+    def test_v11_tags_remote_rows(self):
+        conn, path = _db()
+        for ext, city in (("a", "Remote"), ("b", "Remote · Worldwide"), ("c", "Berlin")):
+            job = _sample_job(ext_id=ext)
+            job.update(title=f"Role {ext}", city=city)
+            upsert_job(conn, job)
+        conn.execute("DELETE FROM schema_meta WHERE version >= 11")
+        conn.commit()
+        conn = init_db(path)
+        assert dict(conn.execute("SELECT city, country FROM jobs").fetchall()) == {
+            "Remote": "REMOTE", "Remote · Worldwide": "REMOTE", "Berlin": "DE"}
+
+
 class TestFeedback:
     def test_record_and_retrieve_feedback_event(self):
         import uuid

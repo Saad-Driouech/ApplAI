@@ -16,6 +16,7 @@ from typing import Optional
 import src.database as db
 from src.logger import audit, get_logger
 from src.matching.gemini_client import BudgetExceeded, ScoreParseError, ScoreResult, http_status
+from src.scrapers.location import REMOTE
 from src.utils.jd_sanitizer import sanitize_jd
 
 log = get_logger(__name__)
@@ -125,7 +126,8 @@ class Scorer:
             job_id = job["id"]
 
             # ── Location pre-filter: skip jobs outside target countries ──
-            if self._allowed_countries and job.get("country") not in self._allowed_countries:
+            country = job.get("country")
+            if self._allowed_countries and country != REMOTE and country not in self._allowed_countries:
                 with db.get_conn(self._db_path) as conn:
                     db.update_score(
                         conn,

@@ -47,6 +47,13 @@ class TestCoverLetterBody:
         assert r"AT\&T\_Labs" in tex and r"C\# Dev" in tex
 
 
+class TestRemoteCoverLetter:
+    def test_no_address_line_for_remote_roles(self, generator):
+        tex = generator._fill_template("Body", {"company": "Acme", "title": "ML Eng", "country": "REMOTE",
+                                                "city": "Remote · Worldwide"})
+        assert "REMOTE" not in tex and "Remote · Worldwide" not in tex
+
+
 class TestValidateInput:
     def _job(self, description):
         return {"title": "ML Eng", "company": "Acme", "country": "DE", "description": description}
@@ -65,6 +72,9 @@ class TestValidateInput:
 
     def test_country_outside_targets_accepted_for_rescued_jobs(self):
         assert validate_input(self._job("desc") | {"country": "US"})["country"] == "US"
+
+    def test_remote_country_accepted(self):
+        assert validate_input(self._job("desc") | {"country": "REMOTE"})["country"] == "REMOTE"
 
     def test_malformed_country_rejected(self):
         with pytest.raises(ValueError):

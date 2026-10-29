@@ -99,8 +99,8 @@ class TestInferRemoteCountry:
         "Europe, USA, UK, Canada, Switzerland",
         "", None, "Remote", "Fully remote",
     ])
-    def test_workable_from_home_base(self, location):
-        assert infer_remote_country(location) == "DE"
+    def test_remote_roles_tagged_remote(self, location):
+        assert infer_remote_country(location) == "REMOTE"
 
     @pytest.mark.parametrize("location", [
         "USA only", "United States", "Chicago, IL", "Redwood City",
@@ -188,7 +188,8 @@ class TestAdzunaMapItem:
 
 class TestInferOnsiteCountry:
     @pytest.mark.parametrize("location,expected", [
-        ("Berlin", "DE"), ("Hösbach", "DE"), ("", "DE"), (None, "DE"), ("Remote", "DE"),
+        ("Berlin", "DE"), ("Hösbach", "DE"), ("", "DE"), (None, "DE"),
+        ("Remote", "REMOTE"), ("Remote job", "REMOTE"),
         ("Munich, Bavaria, Germany", "DE"), ("Germany, Manchester", "DE"),
         ("Zürich", "CH"), ("Amsterdam", "NL"),
         ("London", "XX"), ("GB - Dundee", "XX"), ("Remote (UK hours)", "XX"),

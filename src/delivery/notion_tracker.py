@@ -35,6 +35,7 @@ _COUNTRY_NAMES = {
     "CH": "Switzerland",
     "QA": "Qatar",
     "NL": "Netherlands",
+    "REMOTE": "Remote",
 }
 
 

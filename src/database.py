@@ -22,7 +22,7 @@ from src.logger import get_logger
 log = get_logger(__name__)
 
 # Bump this when the schema changes.
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 # Failed attempts at the current stage (scoring or generation) before a job is marked 'failed'
 MAX_ATTEMPTS = 3
@@ -147,6 +147,10 @@ _MIGRATIONS = {
     ],
     10: [
         lambda conn: _migrate_v10_arbeitnow_posted_at(conn),
+    ],
+    11: [
+        # Remote roles were tagged with an assumed DE
+        "UPDATE jobs SET country = 'REMOTE' WHERE country = 'DE' AND lower(city) LIKE 'remote%'",
     ],
 }
 

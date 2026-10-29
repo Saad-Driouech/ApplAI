@@ -15,7 +15,7 @@ LIMITS = {
     "title": 200,
     "company": 150,
     "city": 100,
-    "country": 5,
+    "country": 10,
     "description": 50_000,
     "salary_info": 200,
     "source_url": 2000,

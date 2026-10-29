@@ -2,7 +2,7 @@
 Groq client for job scoring (Tier 1 LLM — alternative to Gemini).
 
 Uses the official Groq Python SDK. Shares ScoreResult / BudgetExceeded /
-_RateLimiter / _SCORE_PROMPT_TEMPLATE from gemini_client.py so both clients
+_RateLimiter / build_score_prompt from gemini_client.py so both clients
 are drop-in replacements for each other.
 
 Free-tier limits vary by model: https://console.groq.com/settings/limits
@@ -14,7 +14,7 @@ from pathlib import Path
 from src.matching.gemini_client import (
     BudgetExceeded,
     ScoreResult,
-    _SCORE_PROMPT_TEMPLATE,
+    build_score_prompt,
     shared_limiter,
 )
 from src.matching.response_parser import parse_score_response
@@ -69,14 +69,7 @@ class GroqClient:
         return response.choices[0].message.content
 
     def score_job(self, job: dict, cv_summary: str, user_preferences: str = "") -> ScoreResult:
-        prompt = _SCORE_PROMPT_TEMPLATE.format(
-            cv_summary=cv_summary,
-            title=job.get("title", ""),
-            company=job.get("company", ""),
-            country=job.get("country", ""),
-            description=(job.get("description") or "")[:3000],
-            user_preferences=user_preferences,
-        )
+        prompt = build_score_prompt(job, cv_summary, user_preferences)
 
         try:
             raw = self._call(prompt)

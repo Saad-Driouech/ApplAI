@@ -137,6 +137,15 @@ class TestScoringOutcomes:
         assert row["status"] == "failed" and row["attempts"] == db.MAX_ATTEMPTS
         assert "ScoreParseError" in row["last_error"]
 
+    def test_remote_jobs_pass_location_filter(self, db_with_job):
+        with db.get_conn(db_with_job) as conn:
+            conn.execute("UPDATE jobs SET country = 'REMOTE', city = 'Remote' WHERE id = 'j1'")
+        stats = Scorer(
+            db_with_job, _FakeClient('{"score": 8, "reasoning": "fit"}'), cv_summary="",
+            allowed_countries=frozenset({"DE"}),
+        ).run()
+        assert stats["filtered"] == 0 and stats["queued"] == 1
+
     def test_valid_reply_is_scored(self, db_with_job):
         stats = Scorer(db_with_job, _FakeClient('{"score": 8, "reasoning": "fit"}'), cv_summary="").run()
         assert stats["queued"] == 1
@@ -204,3 +213,21 @@ class TestHasAiKeywords:
             "Training Manager",
             "Design and deliver employee onboarding programs.",
         ) is False
+
+
+class TestScorePrompt:
+    def test_remote_without_requirement_is_not_presented_as_a_country(self):
+        from src.matching.gemini_client import build_score_prompt
+        prompt = build_score_prompt({"title": "T", "company": "C", "country": "REMOTE", "city": "Remote"}, "cv")
+        assert "Location: Remote (no location requirement stated in the listing)" in prompt
+        assert "Country:" not in prompt
+
+    def test_remote_requirement_and_onsite_location_shown(self):
+        from src.matching.gemini_client import build_score_prompt
+        assert "Location: Remote · Worldwide" in build_score_prompt(
+            {"country": "REMOTE", "city": "Remote · Worldwide"}, "cv")
+        assert "Location: Berlin, DE" in build_score_prompt({"country": "DE", "city": "Berlin"}, "cv")
+
+    def test_prompt_states_location_eligibility_rule(self):
+        from src.matching.gemini_client import build_score_prompt
+        assert "Location eligibility is a hard blocker" in build_score_prompt({}, "cv")

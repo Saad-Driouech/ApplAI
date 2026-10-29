@@ -198,10 +198,10 @@ class CoverLetterGenerator:
         country = job.get("country", "")
         city = job.get("city", "")
 
-        country_name = _COUNTRY_NAMES.get(country, country)
+        country_name = "" if country == "REMOTE" else _COUNTRY_NAMES.get(country, country)
         # Build recipient city line from job city + country
         recipient_city = ""
-        if city and city.lower() != "remote":
+        if city and not city.lower().startswith("remote"):
             recipient_city = f"{city}, {country_name}" if country_name else city
         elif country_name:
             recipient_city = country_name

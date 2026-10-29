@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import re
 
-HOME_COUNTRY = "DE"       # region-wide remote roles are workable from here
+HOME_COUNTRY = "DE"       # default for unrecognised places on German-focused boards
+REMOTE = "REMOTE"         # remote role; eligibility is judged by the scorer from the posting
 OUTSIDE_TARGETS = "XX"    # location names a place outside the target countries
 
 _REGION_TERMS = ("worldwide", "anywhere", "global", "europe", "european union", "eu", "emea")
@@ -39,12 +40,12 @@ def _has_term(text: str, terms: tuple[str, ...]) -> bool:
 def infer_remote_country(location: str | None) -> str:
     text = (location or "").lower()
     if _has_term(text, _REGION_TERMS):
-        return HOME_COUNTRY
+        return REMOTE
     for code, terms in _COUNTRY_TERMS.items():
         if _has_term(text, terms):
             return code
     if not set(re.findall(r"\w+", text)) - _FILLER:
-        return HOME_COUNTRY
+        return REMOTE
     return OUTSIDE_TARGETS
 
 
@@ -62,4 +63,7 @@ def infer_onsite_country(location: str | None) -> str:
             return code
     if _has_term(text, _OUTSIDE_TERMS):
         return OUTSIDE_TARGETS
+    words = set(re.findall(r"\w+", text))
+    if "remote" in words and not words - _FILLER:
+        return REMOTE
     return HOME_COUNTRY

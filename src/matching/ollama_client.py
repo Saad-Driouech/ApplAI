@@ -4,7 +4,7 @@ Ollama client for job scoring (local LLM fallback).
 Uses the OpenAI-compatible /v1/chat/completions endpoint that Ollama
 exposes by default. No API key, no rate limits, no cost.
 
-Shares ScoreResult / _SCORE_PROMPT_TEMPLATE from gemini_client.py
+Shares ScoreResult / build_score_prompt from gemini_client.py
 so all three clients are drop-in replacements.
 """
 from __future__ import annotations
@@ -13,7 +13,7 @@ import httpx
 
 from src.matching.gemini_client import (
     ScoreResult,
-    _SCORE_PROMPT_TEMPLATE,
+    build_score_prompt,
 )
 from src.matching.response_parser import parse_score_response
 from src.logger import audit, get_logger
@@ -50,14 +50,7 @@ class OllamaClient:
         return resp.json()["choices"][0]["message"]["content"]
 
     def score_job(self, job: dict, cv_summary: str, user_preferences: str = "") -> ScoreResult:
-        prompt = _SCORE_PROMPT_TEMPLATE.format(
-            cv_summary=cv_summary,
-            title=job.get("title", ""),
-            company=job.get("company", ""),
-            country=job.get("country", ""),
-            description=(job.get("description") or "")[:3000],
-            user_preferences=user_preferences,
-        )
+        prompt = build_score_prompt(job, cv_summary, user_preferences)
 
         try:
             raw = self._call(prompt)

@@ -50,7 +50,7 @@ def validate_input(data: dict) -> dict:
     data["company_safe"] = safe_company[:100]
 
     # Target countries are enforced at scoring; a rescued job may be outside them
-    if not re.fullmatch(r"[A-Z]{2}", data["country"] or ""):
+    if not re.fullmatch(r"[A-Z]{2}|REMOTE", data["country"] or ""):
         raise ValueError(f"Invalid country code: {data['country']!r}")
 
     return data
