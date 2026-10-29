@@ -190,6 +190,23 @@ def phase_score(cfg) -> dict:
     return stats
 
 
+def score_single_job(cfg, job: dict):
+    """Score one job dict (title, company, city, country, description) without touching its DB row."""
+    from src.feedback.preferences import build_preference_context
+    from src.matching.scorer import Scorer
+
+    scoring_client, fallback_client = build_tier1_clients(cfg)
+    scorer = Scorer(
+        db_path=cfg.paths.db_path,
+        client=scoring_client,
+        cv_summary=load_cv_summary(cfg),
+        score_threshold=cfg.score_threshold,
+        user_preferences=build_preference_context(cfg.paths.db_path),
+        fallback_client=fallback_client,
+    )
+    return scorer.score_single({"id": job.get("id", "adhoc"), **job})
+
+
 def resolve_cv_template(name: str | None = None) -> Path:
     """
     Map a template name to its path via APPLAI_CV_TEMPLATES ("name=/path,...").

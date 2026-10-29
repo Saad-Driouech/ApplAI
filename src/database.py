@@ -490,6 +490,69 @@ def get_jobs_by_status(
     ).fetchall()
 
 
+_JOB_LIST_COLUMNS = (
+    "j.id, j.source, j.title, j.company, j.city, j.country, j.source_url, j.posted_at, "
+    "j.scraped_at, j.score, j.score_reasoning, j.status, j.skip_reason, j.last_error, "
+    "a.id AS application_id, a.user_decision, a.decision_at"
+)
+_LATEST_APPLICATION = "SELECT id FROM applications WHERE job_id = j.id ORDER BY generated_at DESC LIMIT 1"
+
+
+def list_jobs(
+    conn: sqlite3.Connection,
+    *,
+    status: Optional[str] = None,
+    country: Optional[str] = None,
+    company: Optional[str] = None,
+    since: Optional[str] = None,
+    min_score: Optional[float] = None,
+    limit: int = 50,
+) -> list[sqlite3.Row]:
+    """Filter jobs (newest first) joined with their latest application. company is a substring match."""
+    clauses, params = [], []
+    if status:
+        clauses.append("j.status = ?")
+        params.append(status)
+    if country:
+        clauses.append("j.country = ?")
+        params.append(country)
+    if company:
+        clauses.append("j.company LIKE ? ESCAPE '\\'")
+        escaped = company.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        params.append(f"%{escaped}%")
+    if since:
+        clauses.append("j.scraped_at >= ?")
+        params.append(since)
+    if min_score is not None:
+        clauses.append("j.score >= ?")
+        params.append(min_score)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    # where is built only from the fixed clauses above; all values are bound parameters
+    sql = f"""
+        SELECT {_JOB_LIST_COLUMNS}
+        FROM jobs j
+        LEFT JOIN applications a ON a.id = ({_LATEST_APPLICATION})
+        {where}
+        ORDER BY j.scraped_at DESC
+        LIMIT ?
+    """
+    return conn.execute(sql, (*params, limit)).fetchall()
+
+
+def find_by_dedup_key(conn: sqlite3.Connection, company: str, title: str) -> list[sqlite3.Row]:
+    """Original (non-duplicate) jobs whose normalized company+title matches."""
+    # Interpolates module constants only; the key is a bound parameter
+    sql = f"""
+        SELECT {_JOB_LIST_COLUMNS}
+        FROM jobs j
+        LEFT JOIN applications a ON a.id = ({_LATEST_APPLICATION})
+        WHERE j.dedup_key = ?
+          AND (j.skip_reason IS NULL OR j.skip_reason != 'duplicate')
+        ORDER BY j.scraped_at DESC
+    """  # nosec B608
+    return conn.execute(sql, (_compute_dedup_key(company, title),)).fetchall()
+
+
 def expire_stale_jobs(conn: sqlite3.Connection, max_age_days: int) -> int:
     """Skip 'new'/'queued' jobs scraped more than max_age_days ago. Returns the count."""
     cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat()
