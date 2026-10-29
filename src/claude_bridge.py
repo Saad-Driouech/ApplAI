@@ -8,9 +8,9 @@ as the system prompt — never via env vars, shell args, or subprocess.
 from __future__ import annotations
 
 import os
+import re
 
 MAX_JD_LENGTH = 50_000
-ALLOWED_COUNTRIES = {"DE", "SA", "AE", "CH", "QA", "NL"}
 
 
 def validate_input(data: dict) -> dict:
@@ -34,9 +34,13 @@ def validate_input(data: dict) -> dict:
         elif not data.get(field):
             data[field] = ""
 
-    jd = data.get("description", "")
-    if len(jd) > MAX_JD_LENGTH:
-        data["description"] = jd[:MAX_JD_LENGTH] + "\n[TRUNCATED]"
+    # Untrusted JD text: sanitize before it reaches the document LLM
+    jd = data.get("description") or ""
+    if jd:
+        from src.utils.jd_sanitizer import sanitize_jd
+        sanitized = sanitize_jd(jd)  # also truncates to MAX_JD_LENGTH
+        jd = "" if sanitized["blocked"] else sanitized["clean_text"]
+    data["description"] = jd
 
     company = data["company"]
     safe_company = "".join(c for c in company if c.isalnum() or c in " -.").strip()
@@ -45,8 +49,9 @@ def validate_input(data: dict) -> dict:
         raise ValueError(f"Company name sanitises to empty: {company}")
     data["company_safe"] = safe_company[:100]
 
-    if data["country"] not in ALLOWED_COUNTRIES:
-        raise ValueError(f"Unknown country code: {data['country']}")
+    # Target countries are enforced at scoring; a rescued job may be outside them
+    if not re.fullmatch(r"[A-Z]{2}|REMOTE", data["country"] or ""):
+        raise ValueError(f"Invalid country code: {data['country']!r}")
 
     return data
 
@@ -94,7 +99,10 @@ def _call_anthropic(system_prompt: str, user_prompt: str, max_tokens: int) -> di
             system=system_prompt,
             messages=[{"role": "user", "content": user_prompt}],
         )
-        return {"status": "success", "output": message.content[0].text}
+        if message.stop_reason == "max_tokens":
+            return {"status": "error", "error": f"Output truncated at max_tokens={max_tokens}"}
+        text = "".join(block.text for block in message.content if getattr(block, "type", "") == "text")
+        return {"status": "success", "output": text}
     except Exception as exc:
         return {"status": "error", "error": str(exc)}
 
@@ -109,18 +117,25 @@ def _call_groq(system_prompt: str, user_prompt: str, max_tokens: int) -> dict:
     if not api_key:
         return {"status": "error", "error": "GROQ_API_KEY is not set"}
 
-    model = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+    model = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
+
+    # Reasoning models spend completion tokens on thinking; keep it short
+    extra = {"reasoning_effort": "low"} if model.startswith("openai/gpt-oss") else {}
 
     try:
         client = Groq(api_key=api_key)
         response = client.chat.completions.create(
             model=model,
             max_tokens=max_tokens,
+            **extra,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
         )
-        return {"status": "success", "output": response.choices[0].message.content}
+        choice = response.choices[0]
+        if choice.finish_reason == "length":
+            return {"status": "error", "error": f"Output truncated at max_tokens={max_tokens}"}
+        return {"status": "success", "output": choice.message.content or ""}
     except Exception as exc:
         return {"status": "error", "error": str(exc)}

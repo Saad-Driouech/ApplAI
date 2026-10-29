@@ -14,12 +14,17 @@ services:
     environment:
       - APPLAI_DB_PATH=/data/db/applai.db
       - APPLAI_WORKING_DIR=/mnt/job_applications
+      - APPLAI_LOGS_DIR=/mnt/job_applications/logs   # host path from .env doesn't exist in the container
       - APPLAI_CV_TEMPLATE=${APPLAI_CV_TEMPLATE}
       - APPLAI_CL_TEMPLATE=${APPLAI_CL_TEMPLATE}
     volumes:
       - ./src:/app/src:ro
       - ./data/db:/data/db
       - ${APPLAI_WORKING_DIR}:/mnt/job_applications
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     networks:
       - applai-net
     healthcheck:
@@ -50,9 +55,7 @@ services:
       - applai-api
 
     environment:
-      - N8N_BASIC_AUTH_ACTIVE=true
-      - N8N_BASIC_AUTH_USER=${N8N_USER}
-      - N8N_BASIC_AUTH_PASSWORD=${N8N_PASSWORD}
+      # Auth: n8n user management (owner account created on first launch)
       # Security hardening
       - N8N_DIAGNOSTICS_ENABLED=false
       - N8N_TEMPLATES_ENABLED=false

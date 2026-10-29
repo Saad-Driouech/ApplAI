@@ -11,6 +11,7 @@ from typing import Any
 
 from src.logger import get_logger
 from src.scrapers.base import BaseScraper, ScraperError
+from src.scrapers.location import infer_remote_country, remote_city
 
 log = get_logger(__name__)
 
@@ -78,33 +79,16 @@ class RemotiveScraper(BaseScraper):
         if not job_id:
             raise ValueError("Missing id")
 
-        # Remotive is remote-only — use "REMOTE" as country placeholder
-        # but tag with "DE" if the company is Europe-based (best effort)
         candidate_region = item.get("candidate_required_location", "")
-        country = self._infer_country(candidate_region)
 
         return {
             "external_id": job_id,
             "title": item.get("title", ""),
             "company": item.get("company_name", ""),
-            "city": "Remote",
-            "country": country,
+            "city": remote_city(candidate_region),
+            "country": infer_remote_country(candidate_region),
             "salary_info": item.get("salary", ""),
             "source_url": item.get("url", ""),
             "description": item.get("description", ""),
             "posted_at": item.get("publication_date", ""),
         }
-
-    @staticmethod
-    def _infer_country(region: str) -> str:
-        """Best-effort country tag from Remotive's free-text region field."""
-        region_lower = region.lower()
-        if any(k in region_lower for k in ("germany", "deutschland", "de", "europe", "eu")):
-            return "DE"
-        if any(k in region_lower for k in ("uae", "dubai", "emirates")):
-            return "AE"
-        if any(k in region_lower for k in ("saudi", "riyadh", "ksa")):
-            return "SA"
-        if "worldwide" in region_lower or "anywhere" in region_lower or not region:
-            return "DE"   # default to DE for worldwide remote
-        return "DE"

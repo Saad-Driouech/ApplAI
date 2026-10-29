@@ -11,9 +11,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt \
-    && pip install --no-cache-dir fastapi uvicorn[standard]
+RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src/ ./src/
+
+# Unprivileged runtime user (same UID as the n8n container)
+RUN useradd --create-home --uid 1000 applai
+USER applai
 
 CMD ["uvicorn", "src.api:app", "--host", "0.0.0.0", "--port", "8000"]

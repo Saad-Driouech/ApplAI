@@ -7,8 +7,6 @@ import src.config as config_module
 
 def _patch_env(monkeypatch, overrides: dict):
     required = {
-        "N8N_USER": "admin",
-        "N8N_PASSWORD": "secret",
         "GOOGLE_AI_API_KEY": "gemini-key",
         "ANTHROPIC_API_KEY": "anthropic-key",
         "DISCORD_BOT_TOKEN": "Bot.abc123",
@@ -27,7 +25,6 @@ class TestConfigLoad:
     def test_happy_path(self, monkeypatch):
         _patch_env(monkeypatch, {})
         cfg = config_module.load()
-        assert cfg.n8n.user == "admin"
         assert cfg.gemini.api_key == "gemini-key"
         assert cfg.discord.channel_id == "123456789"
         assert cfg.tier1_provider == "gemini"
@@ -53,3 +50,15 @@ class TestConfigLoad:
         _patch_env(monkeypatch, {"SCORE_THRESHOLD": "7.5"})
         cfg = config_module.load()
         assert cfg.score_threshold == pytest.approx(7.5)
+
+    def test_job_max_age_days(self, monkeypatch):
+        _patch_env(monkeypatch, {})
+        monkeypatch.delenv("JOB_MAX_AGE_DAYS", raising=False)
+        assert config_module.load().job_max_age_days == 30
+        monkeypatch.setenv("JOB_MAX_AGE_DAYS", "45")
+        assert config_module.load().job_max_age_days == 45
+
+    def test_batch_sizes(self, monkeypatch):
+        _patch_env(monkeypatch, {"SCORE_BATCH_SIZE": "20", "GENERATE_BATCH_SIZE": "3"})
+        cfg = config_module.load()
+        assert (cfg.score_batch_size, cfg.generate_batch_size) == (20, 3)

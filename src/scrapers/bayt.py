@@ -100,7 +100,7 @@ class BaytScraper(BaseScraper):
             raise ValueError("Missing url in JSON-LD item")
 
         # Use URL path hash as external_id since Bayt doesn't always expose IDs
-        ext_id = hashlib.md5(url.encode()).hexdigest()
+        ext_id = hashlib.md5(url.encode(), usedforsecurity=False).hexdigest()
 
         loc = item.get("jobLocation", {})
         if isinstance(loc, list):
@@ -142,7 +142,7 @@ class BaytScraper(BaseScraper):
             if url and not url.startswith("http"):
                 url = "https://www.bayt.com" + url
 
-            ext_id = hashlib.md5(url.encode()).hexdigest()
+            ext_id = hashlib.md5(url.encode(), usedforsecurity=False).hexdigest()
             title_el = card.select_one("h2, .t-large")
             company_el = card.select_one("[data-js-company-name], .t-default")
             location_el = card.select_one("[data-js-location], .t-mute")

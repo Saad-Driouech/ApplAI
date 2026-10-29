@@ -8,12 +8,17 @@ import pytest
 from src.database import (
     _compute_dedup_key,
     create_application,
+    expire_stale_jobs,
     get_conn,
     get_jobs_by_status,
     get_recent_skipped,
     init_db,
     job_exists,
+    record_failure,
     record_feedback_event,
+    rescue_job,
+    recover_interrupted_generation,
+    start_generation,
     update_score,
     update_status,
     upsert_job,
@@ -184,6 +189,151 @@ class TestCrossSourceDedup:
         assert result is True
 
 
+class TestExpireStaleJobs:
+    def test_expires_old_new_and_queued_only(self):
+        conn, _ = _db()
+        jobs = {name: _sample_job(ext_id=name) for name in ("old_new", "old_queued", "old_delivered", "fresh_new")}
+        for name, job in jobs.items():
+            job["title"] = name  # distinct dedup keys
+            upsert_job(conn, job)
+        update_status(conn, jobs["old_queued"]["id"], "queued")
+        update_status(conn, jobs["old_delivered"]["id"], "delivered")
+        for name in ("old_new", "old_queued", "old_delivered"):
+            conn.execute("UPDATE jobs SET scraped_at = '2026-01-01T00:00:00+00:00' WHERE id = ?", (jobs[name]["id"],))
+
+        assert expire_stale_jobs(conn, max_age_days=30) == 2
+        status = {r["title"]: (r["status"], r["skip_reason"]) for r in conn.execute("SELECT * FROM jobs")}
+        assert status["old_new"] == ("skipped", "expired")
+        assert status["old_queued"] == ("skipped", "expired")
+        assert status["old_delivered"] == ("delivered", None)
+        assert status["fresh_new"] == ("new", None)
+
+
+class TestAttempts:
+    def _job(self, conn, status="queued"):
+        job = _sample_job()
+        upsert_job(conn, job)
+        update_status(conn, job["id"], status)
+        return job["id"]
+
+    def _row(self, conn, job_id):
+        return conn.execute("SELECT status, attempts, last_error FROM jobs WHERE id = ?", (job_id,)).fetchone()
+
+    def test_failed_after_max_attempts(self):
+        conn, _ = _db()
+        job_id = self._job(conn)
+        assert record_failure(conn, job_id, "queued", "boom 1") is False
+        assert record_failure(conn, job_id, "queued", "boom 2") is False
+        assert tuple(self._row(conn, job_id)) == ("queued", 2, "boom 2")
+        assert record_failure(conn, job_id, "queued", "boom 3") is True
+        assert tuple(self._row(conn, job_id)) == ("failed", 3, "boom 3")
+
+    def test_successful_score_resets_attempts(self):
+        conn, _ = _db()
+        job_id = self._job(conn, status="new")
+        record_failure(conn, job_id, "new", "parse error")
+        update_score(conn, job_id, 7.0, "fit", "queued")
+        assert tuple(self._row(conn, job_id)) == ("queued", 0, None)
+
+    def test_claim_only_succeeds_once(self):
+        conn, _ = _db()
+        job_id = self._job(conn)
+        assert start_generation(conn, job_id) is True
+        assert start_generation(conn, job_id) is False
+
+    def test_recovers_only_stale_generating_jobs(self):
+        conn, _ = _db()
+        stale = self._job(conn)
+        start_generation(conn, stale)
+        conn.execute("UPDATE jobs SET attempted_at = '2026-01-01T00:00:00+00:00' WHERE id = ?", (stale,))
+        fresh = _sample_job(ext_id="fresh")
+        fresh["title"] = "Other"
+        upsert_job(conn, fresh)
+        update_status(conn, fresh["id"], "queued")
+        start_generation(conn, fresh["id"])
+
+        assert recover_interrupted_generation(conn, older_than_minutes=30) == 1
+        assert tuple(self._row(conn, stale))[:2] == ("queued", 1)
+        assert self._row(conn, fresh["id"])["status"] == "generating"
+
+
+class TestMigrations:
+    def test_v4_requeues_jobs_wrongly_scored_zero_by_parse_errors(self):
+        conn, path = _db()
+        victim, real_low = _sample_job(ext_id="a"), _sample_job(ext_id="b")
+        real_low["title"] = "Other role"
+        upsert_job(conn, victim)
+        upsert_job(conn, real_low)
+        update_score(conn, victim["id"], 0.0, "Parse error — see raw_response", "skipped")
+        update_score(conn, real_low["id"], 2.0, "Parse error — see raw_response", "skipped")
+        # Pretend the DB is still at schema v3
+        conn.execute("DELETE FROM schema_meta WHERE version >= 4")
+        conn.commit()
+
+        conn = init_db(path)
+        rows = {r["id"]: r for r in conn.execute("SELECT id, status, score FROM jobs")}
+        assert rows[victim["id"]]["status"] == "new" and rows[victim["id"]]["score"] is None
+        # A score the old regex actually recovered is a real (low) score — left alone
+        assert rows[real_low["id"]]["status"] == "skipped"
+
+
+class TestTextMigration:
+    def test_v5_decodes_stored_text_and_recomputes_dedup_key(self):
+        conn, path = _db()
+        job = _sample_job()
+        job.update(company="AT&amp;T Labs", title="R&amp;D Engineer",
+                   description="Youâ\u0080\u0099ll build models")
+        upsert_job(conn, job)
+        conn.execute("DELETE FROM schema_meta WHERE version >= 5")
+        conn.commit()
+
+        conn = init_db(path)
+        row = conn.execute("SELECT company, title, description, dedup_key FROM jobs").fetchone()
+        assert row["company"] == "AT&T Labs"
+        assert row["title"] == "R&D Engineer"
+        assert row["description"] == "You’ll build models"
+        assert row["dedup_key"] == _compute_dedup_key("AT&T Labs", "R&D Engineer")
+
+
+class TestStatusRename:
+    def test_v7_renames_submitted_to_delivered(self):
+        conn, path = _db()
+        job = _sample_job()
+        upsert_job(conn, job)
+        update_status(conn, job["id"], "submitted")
+        conn.execute("DELETE FROM schema_meta WHERE version >= 7")
+        conn.commit()
+        conn = init_db(path)
+        assert conn.execute("SELECT status FROM jobs").fetchone()["status"] == "delivered"
+
+
+class TestArbeitnowCountryMigration:
+    def test_v9_retags_foreign_locations(self):
+        conn, path = _db()
+        for ext, city in (("a", "London"), ("b", "Berlin")):
+            job = _sample_job(source="arbeitnow", ext_id=ext)
+            job.update(title=f"Role {ext}", city=city)
+            upsert_job(conn, job)
+        conn.execute("DELETE FROM schema_meta WHERE version >= 9")
+        conn.commit()
+        conn = init_db(path)
+        assert dict(conn.execute("SELECT city, country FROM jobs").fetchall()) == {"London": "XX", "Berlin": "DE"}
+
+
+class TestRemoteCountryMigration:
+    def test_v11_tags_remote_rows(self):
+        conn, path = _db()
+        for ext, city in (("a", "Remote"), ("b", "Remote · Worldwide"), ("c", "Berlin")):
+            job = _sample_job(ext_id=ext)
+            job.update(title=f"Role {ext}", city=city)
+            upsert_job(conn, job)
+        conn.execute("DELETE FROM schema_meta WHERE version >= 11")
+        conn.commit()
+        conn = init_db(path)
+        assert dict(conn.execute("SELECT city, country FROM jobs").fetchall()) == {
+            "Remote": "REMOTE", "Remote · Worldwide": "REMOTE", "Berlin": "DE"}
+
+
 class TestFeedback:
     def test_record_and_retrieve_feedback_event(self):
         import uuid
@@ -222,3 +372,25 @@ class TestFeedback:
         update_score(conn, job["id"], 0.0, "No AI keywords", "skipped", skip_reason="keyword_filter")
         row = conn.execute("SELECT skip_reason FROM jobs WHERE id = ?", (job["id"],)).fetchone()
         assert row["skip_reason"] == "keyword_filter"
+
+
+class TestRescue:
+    def test_digest_excludes_duplicates_and_expired(self):
+        conn, _ = _db()
+        for reason in ("low_score", "location", "duplicate", "expired"):
+            job = _sample_job(ext_id=reason)
+            job["title"] = reason
+            upsert_job(conn, job)
+            update_score(conn, job["id"], 3.0, "x", "skipped", skip_reason=reason)
+        assert {r["skip_reason"] for r in get_recent_skipped(conn)} == {"low_score", "location"}
+
+    def test_rescue_is_atomic_and_resets_state(self):
+        conn, _ = _db()
+        job = _sample_job()
+        upsert_job(conn, job)
+        update_score(conn, job["id"], 3.0, "x", "skipped", skip_reason="location")
+        conn.execute("UPDATE jobs SET attempts = 2 WHERE id = ?", (job["id"],))
+        assert rescue_job(conn, job["id"]) is True
+        assert rescue_job(conn, job["id"]) is False  # second click: already queued
+        row = conn.execute("SELECT status, skip_reason, attempts FROM jobs").fetchone()
+        assert tuple(row) == ("queued", None, 0)

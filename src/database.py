@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Generator, Optional
 
@@ -22,7 +22,10 @@ from src.logger import get_logger
 log = get_logger(__name__)
 
 # Bump this when the schema changes.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 11
+
+# Failed attempts at the current stage (scoring or generation) before a job is marked 'failed'
+MAX_ATTEMPTS = 3
 
 _DDL = """
 PRAGMA journal_mode=WAL;
@@ -50,7 +53,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     score           REAL,                      -- Gemini score 0-10 (NULL = not yet scored)
     score_reasoning TEXT,
     status          TEXT NOT NULL DEFAULT 'new',
-                    -- new | scored | queued | generating | ready | submitted | rejected | skipped
+                    -- new | queued | generating | ready | delivered | approved | rejected | skipped | failed
     dedup_key       TEXT,                      -- normalized company+title for cross-source dedup
     UNIQUE(source, external_id)
 );
@@ -108,7 +111,96 @@ _MIGRATIONS = {
         "ALTER TABLE jobs ADD COLUMN dedup_key TEXT",
         "CREATE INDEX IF NOT EXISTS idx_jobs_dedup ON jobs(dedup_key)",
     ],
+    4: [
+        # Re-queue jobs whose unparseable LLM reply was stored as score 0
+        """
+        UPDATE jobs
+        SET status = 'new', score = NULL, score_reasoning = NULL, skip_reason = NULL
+        WHERE status = 'skipped' AND score = 0 AND score_reasoning LIKE 'Parse error%'
+        """,
+    ],
+    5: [
+        lambda conn: _migrate_v5_normalize_text(conn),
+    ],
+    6: [
+        "ALTER TABLE jobs ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE jobs ADD COLUMN last_error TEXT",
+        "ALTER TABLE jobs ADD COLUMN attempted_at TEXT",
+    ],
+    7: [
+        # 'submitted' meant "sent to Discord for review", not applied
+        "UPDATE jobs SET status = 'delivered' WHERE status = 'submitted'",
+    ],
+    8: [
+        """
+        CREATE TABLE IF NOT EXISTS llm_usage (
+            provider  TEXT NOT NULL,
+            model     TEXT NOT NULL,
+            day       TEXT NOT NULL,           -- provider's quota calendar day
+            requests  INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (provider, model, day)
+        )
+        """,
+    ],
+    9: [
+        lambda conn: _migrate_v9_arbeitnow_country(conn),
+    ],
+    10: [
+        lambda conn: _migrate_v10_arbeitnow_posted_at(conn),
+    ],
+    11: [
+        # Remote roles were tagged with an assumed DE
+        "UPDATE jobs SET country = 'REMOTE' WHERE country = 'DE' AND lower(city) LIKE 'remote%'",
+    ],
 }
+
+
+def _migrate_v10_arbeitnow_posted_at(conn: sqlite3.Connection) -> None:
+    """Convert Arbeitnow Unix-timestamp posted_at values to ISO-8601 UTC."""
+    from src.scrapers.arbeitnow import _iso_from_epoch
+
+    rows = conn.execute(
+        "SELECT id, posted_at FROM jobs WHERE source = 'arbeitnow' AND posted_at GLOB '[0-9]*' AND posted_at NOT LIKE '%-%'"
+    ).fetchall()
+    conn.executemany("UPDATE jobs SET posted_at = ? WHERE id = ?", [(_iso_from_epoch(r["posted_at"]), r["id"]) for r in rows])
+    log.info("Converted posted_at to ISO for %d Arbeitnow jobs", len(rows))
+
+
+def _migrate_v9_arbeitnow_country(conn: sqlite3.Connection) -> None:
+    """Re-derive Arbeitnow countries from the stored location (all were hardcoded DE)."""
+    from src.scrapers.location import infer_onsite_country
+
+    rows = conn.execute("SELECT id, city, country FROM jobs WHERE source = 'arbeitnow'").fetchall()
+    updates = [(infer_onsite_country(r["city"]), r["id"]) for r in rows]
+    changed = [(code, job_id) for (code, job_id), r in zip(updates, rows) if code != r["country"]]
+    conn.executemany("UPDATE jobs SET country = ? WHERE id = ?", changed)
+    log.info("Re-tagged country for %d Arbeitnow jobs", len(changed))
+
+def _migrate_v5_normalize_text(conn: sqlite3.Connection) -> None:
+    """Re-normalize stored text (previously HTML-escaped) and recompute dedup keys."""
+    from src.utils.sanitize import CONTENT_FIELDS, normalize_content
+
+    updates = []
+    rows = conn.execute(
+        "SELECT id, title, company, city, description, salary_info FROM jobs"
+    ).fetchall()
+    for row in rows:
+        fixed = {f: normalize_content(row[f], f) if row[f] is not None else None for f in CONTENT_FIELDS}
+        if any(fixed[f] != row[f] for f in CONTENT_FIELDS):
+            fixed["dedup_key"] = _compute_dedup_key(fixed["company"] or "", fixed["title"] or "")
+            fixed["id"] = row["id"]
+            updates.append(fixed)
+
+    conn.executemany(
+        """
+        UPDATE jobs
+        SET title = :title, company = :company, city = :city,
+            description = :description, salary_info = :salary_info, dedup_key = :dedup_key
+        WHERE id = :id
+        """,
+        updates,
+    )
+    log.info("Normalized stored text for %d job records", len(updates))
 
 
 def _now() -> str:
@@ -172,9 +264,12 @@ def init_db(db_path: Path) -> sqlite3.Connection:
     # Run pending migrations
     for version in sorted(_MIGRATIONS.keys()):
         if version > current:
-            for sql in _MIGRATIONS[version]:
+            for step in _MIGRATIONS[version]:
+                if callable(step):
+                    step(conn)
+                    continue
                 try:
-                    conn.execute(sql)
+                    conn.execute(step)
                 except sqlite3.OperationalError as e:
                     if "duplicate column" not in str(e).lower():
                         raise
@@ -312,35 +407,100 @@ def update_score(
     new_status: str = "scored",
     skip_reason: Optional[str] = None,
 ) -> None:
+    # A completed score starts the next stage with a clean attempt count
     conn.execute(
         """
         UPDATE jobs
-        SET score = ?, score_reasoning = ?, status = ?, skip_reason = ?
+        SET score = ?, score_reasoning = ?, status = ?, skip_reason = ?,
+            attempts = 0, last_error = NULL
         WHERE id = ?
         """,
         (score, reasoning, new_status, skip_reason, job_id),
     )
 
 
+def start_generation(conn: sqlite3.Connection, job_id: str) -> bool:
+    """Atomically claim a queued job for generation. Returns False if it is no longer queued."""
+    cursor = conn.execute(
+        "UPDATE jobs SET status = 'generating', attempted_at = ? WHERE id = ? AND status = 'queued'",
+        (_now(), job_id),
+    )
+    return cursor.rowcount > 0
+
+
+def complete_stage(conn: sqlite3.Connection, job_id: str, status: str) -> None:
+    """Move a job to its next status with a clean attempt count."""
+    conn.execute(
+        "UPDATE jobs SET status = ?, attempts = 0, last_error = NULL WHERE id = ?",
+        (status, job_id),
+    )
+
+
+def record_failure(
+    conn: sqlite3.Connection,
+    job_id: str,
+    retry_status: str,
+    error: str,
+    max_attempts: int = MAX_ATTEMPTS,
+) -> bool:
+    """Count a failed attempt; mark the job 'failed' once out of attempts. Returns True if it gave up."""
+    conn.execute(
+        """
+        UPDATE jobs
+        SET attempts = attempts + 1,
+            last_error = ?,
+            status = CASE WHEN attempts + 1 >= ? THEN 'failed' ELSE ? END
+        WHERE id = ?
+        """,
+        (error[:1000], max_attempts, retry_status, job_id),
+    )
+    row = conn.execute("SELECT status FROM jobs WHERE id = ?", (job_id,)).fetchone()
+    return row is not None and row["status"] == "failed"
+
+
+def recover_interrupted_generation(
+    conn: sqlite3.Connection,
+    older_than_minutes: int = 30,
+    max_attempts: int = MAX_ATTEMPTS,
+) -> int:
+    """Count jobs stuck in 'generating' (crashed run) as a failed attempt. Returns the count."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=older_than_minutes)).isoformat()
+    stuck = conn.execute(
+        "SELECT id FROM jobs WHERE status = 'generating' AND (attempted_at IS NULL OR attempted_at < ?)",
+        (cutoff,),
+    ).fetchall()
+    for row in stuck:
+        record_failure(conn, row["id"], "queued", "Generation interrupted (process stopped)", max_attempts)
+    return len(stuck)
+
+
 def update_status(conn: sqlite3.Connection, job_id: str, status: str) -> None:
     conn.execute("UPDATE jobs SET status = ? WHERE id = ?", (status, job_id))
-
-
-def update_status_direct(db_path, job_id: str, status: str) -> None:
-    """Open a connection, update status, commit, close. Convenience for pipeline."""
-    with get_conn(db_path) as conn:
-        update_status(conn, job_id, status)
 
 
 def get_jobs_by_status(
     conn: sqlite3.Connection,
     status: str,
-    limit: int = 100,
+    limit: Optional[int] = 100,
 ) -> list[sqlite3.Row]:
+    """Best score first, then newest. limit=None returns all."""
     return conn.execute(
         "SELECT * FROM jobs WHERE status = ? ORDER BY score DESC, scraped_at DESC LIMIT ?",
-        (status, limit),
+        (status, -1 if limit is None else limit),
     ).fetchall()
+
+
+def expire_stale_jobs(conn: sqlite3.Connection, max_age_days: int) -> int:
+    """Skip 'new'/'queued' jobs scraped more than max_age_days ago. Returns the count."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat()
+    cursor = conn.execute(
+        """
+        UPDATE jobs SET status = 'skipped', skip_reason = 'expired'
+        WHERE status IN ('new', 'queued') AND scraped_at < ?
+        """,
+        (cutoff,),
+    )
+    return cursor.rowcount
 
 
 def job_exists(conn: sqlite3.Connection, source: str, external_id: str) -> bool:
@@ -370,14 +530,25 @@ def record_user_decision(
     app_id: str,
     decision: str,          # "approved" | "rejected"
     notion_page_id: Optional[str] = None,
-) -> None:
-    conn.execute(
+) -> bool:
+    """Atomically record a decision if none exists. Returns True only for the first caller."""
+    cursor = conn.execute(
         """
         UPDATE applications
-        SET user_decision = ?, decision_at = ?, notion_page_id = ?
-        WHERE id = ?
+        SET user_decision = ?, decision_at = ?,
+            notion_page_id = COALESCE(?, notion_page_id)
+        WHERE id = ? AND user_decision IS NULL
         """,
         (decision, _now(), notion_page_id, app_id),
+    )
+    return cursor.rowcount > 0
+
+
+def release_user_decision(conn: sqlite3.Connection, app_id: str) -> None:
+    """Undo a claimed decision so the user can retry after a failure."""
+    conn.execute(
+        "UPDATE applications SET user_decision = NULL, decision_at = NULL WHERE id = ?",
+        (app_id,),
     )
 
 
@@ -410,6 +581,27 @@ def finish_scrape_run(
     )
 
 
+# ── LLM usage helpers ─────────────────────────────────────────────────────
+
+
+def get_llm_usage(conn: sqlite3.Connection, provider: str, model: str, day: str) -> int:
+    row = conn.execute(
+        "SELECT requests FROM llm_usage WHERE provider = ? AND model = ? AND day = ?",
+        (provider, model, day),
+    ).fetchone()
+    return row["requests"] if row else 0
+
+
+def increment_llm_usage(conn: sqlite3.Connection, provider: str, model: str, day: str) -> None:
+    conn.execute(
+        """
+        INSERT INTO llm_usage (provider, model, day, requests) VALUES (?, ?, ?, 1)
+        ON CONFLICT(provider, model, day) DO UPDATE SET requests = requests + 1
+        """,
+        (provider, model, day),
+    )
+
+
 # ── Feedback helpers ─────────────────────────────────────────────────────
 
 
@@ -427,17 +619,31 @@ def record_feedback_event(
 def get_recent_skipped(
     conn: sqlite3.Connection,
     days: int = 7,
-    limit: int = 20,
+    limit: int = 10,
 ) -> list[sqlite3.Row]:
-    """Get recently skipped jobs for the digest, ordered by score descending."""
+    """Recently skipped jobs worth offering for rescue (not duplicates or expired), best score first."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     return conn.execute(
         """
         SELECT id, title, company, country, score, skip_reason, source_url
         FROM jobs
         WHERE status = 'skipped'
-          AND scraped_at >= datetime('now', ?)
+          AND COALESCE(skip_reason, '') NOT IN ('duplicate', 'expired')
+          AND scraped_at >= ?
         ORDER BY score DESC
         LIMIT ?
         """,
-        (f"-{days} days", limit),
+        (cutoff, limit),
     ).fetchall()
+
+
+def rescue_job(conn: sqlite3.Connection, job_id: str) -> bool:
+    """Atomically move a skipped job to 'queued'. Returns False if it was not skipped."""
+    cursor = conn.execute(
+        """
+        UPDATE jobs SET status = 'queued', skip_reason = NULL, attempts = 0, last_error = NULL
+        WHERE id = ? AND status = 'skipped'
+        """,
+        (job_id,),
+    )
+    return cursor.rowcount > 0

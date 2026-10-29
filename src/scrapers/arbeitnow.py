@@ -7,15 +7,25 @@ Covers: DE (primarily), some remote roles.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlencode
 
 from src.logger import get_logger
 from src.scrapers.base import BaseScraper, ScraperError
+from src.scrapers.location import infer_onsite_country
 
 log = get_logger(__name__)
 
 _API_URL = "https://www.arbeitnow.com/api/job-board-api"
+
+
+def _iso_from_epoch(value) -> str:
+    """Arbeitnow sends Unix timestamps; store ISO-8601 like the other sources."""
+    try:
+        return datetime.fromtimestamp(int(value), timezone.utc).isoformat()
+    except (TypeError, ValueError, OverflowError):
+        return ""
 
 
 class ArbeitnowScraper(BaseScraper):
@@ -66,9 +76,9 @@ class ArbeitnowScraper(BaseScraper):
             "title": item.get("title", ""),
             "company": item.get("company_name", ""),
             "city": item.get("location", ""),
-            "country": "DE",
+            "country": infer_onsite_country(item.get("location")),
             "salary_info": "",
             "source_url": url,
             "description": item.get("description", ""),
-            "posted_at": str(item.get("created_at", "")),
+            "posted_at": _iso_from_epoch(item.get("created_at")),
         }

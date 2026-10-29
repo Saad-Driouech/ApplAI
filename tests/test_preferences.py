@@ -152,3 +152,16 @@ class TestSuggestKeywordAdditions:
 
         suggestions = suggest_keyword_additions(db_path)
         assert "quantitative" in suggestions or "researcher" in suggestions
+
+
+class TestRescueDoubleCounting:
+    def test_rescued_then_rejected_counts_once_as_rejection(self):
+        db_path = _db()
+        for i in range(5):
+            _approve(db_path, _make_job(db_path, f"Robotics Engineer {i}", ext_id=f"r{i}"))
+        job_id = _make_job(db_path, "Sales Engineer", ext_id="s1")
+        with get_conn(db_path) as conn:
+            record_feedback_event(conn, job_id, "rescue")
+        _reject(db_path, job_id)
+        context = build_preference_context(db_path)
+        assert "learned from 6 past decisions" in context

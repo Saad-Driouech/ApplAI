@@ -103,17 +103,27 @@ def analyze(db_path: Path, current_threshold: float = 6.0) -> FeedbackReport:
     if total < MIN_DECISIONS:
         reason = f"Not enough data yet ({total}/{MIN_DECISIONS} decisions). Keep reviewing to calibrate."
     else:
-        # Check each band from lowest up — if rejection rate is high,
-        # suggest raising threshold to avoid wasting document generation.
-        for band in bands:
+        # Raise: a band at or above the threshold is mostly rejected
+        for band in (b for b in bands if b.low >= current_threshold):
             if band.total >= 3 and band.approval_rate < 0.4:
-                recommended = band.high
+                recommended = min(band.high, 10.0)
                 reason = (
                     f"You rejected {1 - band.approval_rate:.0%} of jobs in the "
-                    f"{band.label} band. Consider raising threshold to {band.high:.1f} "
+                    f"{band.label} band. Consider raising threshold to {recommended:.1f} "
                     f"to reduce wasted generations."
                 )
                 break
+
+        # Lower: the band just below the threshold (rescued jobs) is mostly approved
+        below = [b for b in bands if b.high <= current_threshold]
+        if recommended is None and below:
+            band = max(below, key=lambda b: b.high)
+            if band.total >= 3 and band.approval_rate > 0.6:
+                recommended = band.low
+                reason = (
+                    f"You approved {band.approval_rate:.0%} of rescued jobs in the "
+                    f"{band.label} band. Consider lowering threshold to {band.low:.1f}."
+                )
 
         if not reason:
             reason = "Threshold looks well-calibrated based on your decisions."

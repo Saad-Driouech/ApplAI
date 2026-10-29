@@ -63,6 +63,11 @@ def promote_to_final(
 
     Returns a dict with keys cv_path and cover_letter_path (absolute strings).
     """
+    _require_pending_dir(pending)
+    missing = [n for n in ("cv.pdf", "cover_letter.pdf") if not (pending / n).exists()]
+    if missing:
+        raise FileNotFoundError(f"Pending bundle {pending} is missing {missing}")
+
     dest = final_dir(working_dir, country, company)
     dest.mkdir(parents=True, exist_ok=True)
     names = final_filenames(candidate_name, company)
@@ -88,15 +93,22 @@ def promote_to_final(
     }
 
 
+def _require_pending_dir(pending: Path) -> None:
+    """Refuse to operate on anything that is not a `.pending/<app_id>` folder."""
+    if pending.parent.name != ".pending" or pending.is_symlink():
+        raise ValueError(f"Refusing to treat {pending} as a pending folder")
+
+
 def cleanup_pending(pending: Path) -> None:
     """Delete a pending folder and all its contents."""
+    _require_pending_dir(pending)
     if pending.exists() and pending.is_dir():
         shutil.rmtree(pending)
         log.info("Cleaned up pending folder: %s", pending)
 
 
-def cleanup_stale_pending(working_dir: Path, max_age_hours: int = 72) -> int:
-    """Delete pending folders older than max_age_hours. Returns count deleted."""
+def cleanup_stale_pending(working_dir: Path, keep: set[str], max_age_hours: int = 72) -> int:
+    """Delete pending folders older than max_age_hours, except app IDs in *keep*. Returns count deleted."""
     import time
     base = working_dir / ".pending"
     if not base.exists():
@@ -104,7 +116,7 @@ def cleanup_stale_pending(working_dir: Path, max_age_hours: int = 72) -> int:
     cutoff = time.time() - max_age_hours * 3600
     deleted = 0
     for folder in base.iterdir():
-        if folder.is_dir() and folder.stat().st_mtime < cutoff:
+        if folder.is_dir() and folder.name not in keep and folder.stat().st_mtime < cutoff:
             shutil.rmtree(folder)
             log.info("Cleaned up stale pending folder: %s", folder.name)
             deleted += 1

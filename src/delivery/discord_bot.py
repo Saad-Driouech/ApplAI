@@ -45,6 +45,12 @@ _BUNDLE_EMBED = {
 }
 
 
+def _field_value(text, limit: int = 1024) -> str:
+    """Discord rejects empty embed field values and values over 1024 characters."""
+    text = str(text or "").strip() or "—"
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
 class DiscordDelivery:
     """
     Delivers application bundles to a Discord channel with interactive buttons.
@@ -188,26 +194,29 @@ class DiscordDelivery:
         """
         if not jobs:
             return None
+        jobs = jobs[:10]  # one field and one button per job
 
         # Build fields — Discord embeds max 25 fields
         fields = []
-        for job in jobs[:10]:
+        for job in jobs:
             score = job.get("score", 0) or 0
             reason = job.get("skip_reason", "low_score") or "low_score"
-            tag = "filtered" if reason == "keyword_filter" else f"score {score:.1f}"
+            tag = {
+                "keyword_filter": "filtered", "location": "location", "not_a_job": "not a job",
+            }.get(reason, f"score {score:.1f}")
             url = job.get("source_url", "")
             value = f"{job.get('company', '?')} | {tag}"
             if url:
                 value = f"[{job.get('company', '?')}]({url}) | {tag}"
             fields.append({
-                "name": job.get("title", "?")[:256],
-                "value": value,
+                "name": _field_value(job.get("title"), limit=256),
+                "value": _field_value(value),
                 "inline": False,
             })
 
         embed = {
             "title": "Skipped Jobs Digest",
-            "description": f"{len(jobs)} recently skipped jobs. Rescue any that look relevant.",
+            "description": f"Top {len(jobs)} recently skipped jobs. Rescue any that look relevant.",
             "color": 0xFEE75C,  # yellow
             "fields": fields,
             "footer": {"text": "ApplAI Feedback Loop"},
@@ -215,7 +224,7 @@ class DiscordDelivery:
 
         # One rescue button per job (max 5 per action row, max 5 rows)
         components = []
-        for i in range(0, min(len(jobs), 10), 5):
+        for i in range(0, len(jobs), 5):
             row = {
                 "type": 1,  # ACTION_ROW
                 "components": [
@@ -255,18 +264,14 @@ class DiscordDelivery:
             "title": "📋 New Application Ready for Review",
             "color": _EMBED_COLOR_PENDING,
             "fields": [
-                {"name": "Position", "value": job.get("title", "—"), "inline": True},
-                {"name": "Company",  "value": job.get("company", "—"), "inline": True},
-                {"name": "Country",  "value": job.get("country", "—"), "inline": True},
+                {"name": "Position", "value": _field_value(job.get("title")), "inline": True},
+                {"name": "Company",  "value": _field_value(job.get("company")), "inline": True},
+                {"name": "Country",  "value": _field_value(job.get("country")), "inline": True},
                 {"name": "Score",    "value": f"{score:.1f} / 10", "inline": True},
-                {
-                    "name": "Job Link",
-                    "value": job.get("source_url") or "—",
-                    "inline": False,
-                },
+                {"name": "Job Link", "value": _field_value(job.get("source_url")), "inline": False},
                 {
                     "name": "Why it fits",
-                    "value": (reasoning[:500] + "…") if len(reasoning) > 500 else reasoning or "—",
+                    "value": _field_value((reasoning[:500] + "…") if len(reasoning) > 500 else reasoning),
                     "inline": False,
                 },
             ],

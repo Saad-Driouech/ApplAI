@@ -25,12 +25,6 @@ def _optional(name: str, default: str = "") -> str:
 
 
 @dataclass(frozen=True)
-class N8nConfig:
-    user: str
-    password: str
-
-
-@dataclass(frozen=True)
 class GeminiConfig:
     api_key: str
     model: str = "gemini-2.5-flash"
@@ -43,6 +37,7 @@ class DiscordConfig:
     bot_token: str
     channel_id: str
     public_key: str = ""   # from Discord Developer Portal → General Information
+    allowed_user_ids: frozenset = frozenset()   # empty = anyone in the channel may decide
 
 
 @dataclass(frozen=True)
@@ -61,7 +56,7 @@ class AnthropicConfig:
 @dataclass(frozen=True)
 class GroqConfig:
     api_key: str = ""
-    model: str = "llama-3.3-70b-versatile"
+    model: str = "openai/gpt-oss-120b"
     requests_per_minute: int = 30
     requests_per_day: int = 14400
 
@@ -92,7 +87,6 @@ class PathConfig:
 
 @dataclass(frozen=True)
 class AppConfig:
-    n8n: N8nConfig
     gemini: GeminiConfig
     groq: GroqConfig
     discord: DiscordConfig
@@ -102,10 +96,14 @@ class AppConfig:
     adzuna: AdzunaConfig
     paths: PathConfig
     tier1_provider: str        # "gemini" | "groq" | "ollama"
+    api_key: str = ""          # required on all API routes except /health and the Discord webhook
     allowed_countries: frozenset = field(
         default_factory=lambda: frozenset({"DE", "SA", "AE", "CH", "QA", "NL"})
     )
     score_threshold: float = 6.0      # jobs below this score are skipped
+    job_max_age_days: int = 30        # unscored/ungenerated jobs older than this expire
+    score_batch_size: int = 50        # max LLM scoring calls per run
+    generate_batch_size: int = 10     # max document bundles generated per run
     debug: bool = False
 
 
@@ -116,11 +114,6 @@ def load() -> AppConfig:
 
     Raises EnvironmentError for any missing required variable.
     """
-    n8n = N8nConfig(
-        user=_require("N8N_USER"),
-        password=_require("N8N_PASSWORD"),
-    )
-
     gemini = GeminiConfig(
         api_key=_require("GOOGLE_AI_API_KEY"),
         model=_optional("GEMINI_MODEL", "gemini-2.5-flash"),
@@ -132,6 +125,9 @@ def load() -> AppConfig:
         bot_token=_require("DISCORD_BOT_TOKEN"),
         channel_id=_require("DISCORD_CHANNEL_ID"),
         public_key=_optional("DISCORD_PUBLIC_KEY", ""),
+        allowed_user_ids=frozenset(
+            uid.strip() for uid in _optional("DISCORD_ALLOWED_USER_IDS", "").split(",") if uid.strip()
+        ),
     )
 
     notion = NotionConfig(
@@ -164,7 +160,7 @@ def load() -> AppConfig:
 
     groq = GroqConfig(
         api_key=_optional("GROQ_API_KEY", ""),
-        model=_optional("GROQ_MODEL", "llama-3.3-70b-versatile"),
+        model=_optional("GROQ_MODEL", "openai/gpt-oss-120b"),
         requests_per_minute=int(_optional("GROQ_RPM", "30")),
         requests_per_day=int(_optional("GROQ_RPD", "14400")),
     )
@@ -185,7 +181,6 @@ def load() -> AppConfig:
         )
 
     return AppConfig(
-        n8n=n8n,
         gemini=gemini,
         groq=groq,
         discord=discord,
@@ -195,7 +190,11 @@ def load() -> AppConfig:
         adzuna=adzuna,
         paths=paths,
         tier1_provider=tier1_provider,
+        api_key=_optional("APPLAI_API_KEY", ""),
         score_threshold=float(_optional("SCORE_THRESHOLD", "6.0")),
+        job_max_age_days=int(_optional("JOB_MAX_AGE_DAYS", "30")),
+        score_batch_size=int(_optional("SCORE_BATCH_SIZE", "50")),
+        generate_batch_size=int(_optional("GENERATE_BATCH_SIZE", "10")),
         debug=_optional("APPLAI_DEBUG", "false").lower() == "true",
     )
 

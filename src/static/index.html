@@ -86,19 +86,42 @@ const STATUS_META = {
   queued:     { label: 'Queued',     color: '#e67700', bg: '#4a2800' },
   generating: { label: 'Generating', color: '#ae3ec9', bg: '#3b1350' },
   ready:      { label: 'Ready',      color: '#f59f00', bg: '#4a3300' },
-  submitted:  { label: 'Submitted',  color: '#2f9e44', bg: '#143320' },
+  delivered:  { label: 'Delivered',  color: '#2f9e44', bg: '#143320' },
   approved:   { label: 'Approved',   color: '#2f9e44', bg: '#143320' },
   rejected:   { label: 'Rejected',   color: '#e03131', bg: '#3b1212' },
   skipped:    { label: 'Skipped',    color: '#495057', bg: '#1e2128' },
-  duplicate:  { label: 'Duplicate',  color: '#364fc7', bg: '#1a2050' },
+  failed:     { label: 'Failed',     color: '#c92a2a', bg: '#3b1212' },
 };
 
-const ORDER = ['new','queued','generating','ready','submitted','approved','rejected','skipped','duplicate'];
+const ORDER = ['new','queued','generating','ready','delivered','approved','rejected','skipped','failed'];
+
+// Escape text before inserting it as HTML (stored job data is plain text)
+function esc(value) {
+  return String(value ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+}
+
+function storedKey() {
+  try { return localStorage.getItem('applai_api_key') || ''; } catch { return ''; }
+}
+
+// Calls the API with the X-API-Key header; asks for the key once on 401.
+async function api(path, options = {}, retried = false) {
+  const r = await fetch(path, { ...options, headers: { ...(options.headers || {}), 'X-API-Key': storedKey() } });
+  if (r.status === 401 && !retried) {
+    const key = window.prompt('ApplAI API key');
+    if (key) {
+      try { localStorage.setItem('applai_api_key', key); } catch {}
+      return api(path, options, true);
+    }
+  }
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(`${r.status} ${data.detail || r.statusText}`);
+  return data;
+}
 
 async function fetchStats() {
   try {
-    const r = await fetch('/stats');
-    const data = await r.json();
+    const data = await api('/stats');
     renderStats(data.jobs || {});
     document.getElementById('health-dot').className = 'status-dot bg-green-500';
   } catch {
@@ -117,15 +140,14 @@ function renderStats(jobs) {
     return `
       <div class="stat-card" style="border-color: ${meta.color}33">
         <div class="text-2xl font-bold" style="color: ${meta.color}">${count}</div>
-        <div class="text-xs text-slate-400 mt-1">${meta.label}</div>
+        <div class="text-xs text-slate-400 mt-1">${esc(meta.label)}</div>
       </div>`;
   }).join('');
 }
 
 async function fetchScrapeRuns() {
   try {
-    const r = await fetch('/scrape-runs');
-    const data = await r.json();
+    const data = await api('/scrape-runs');
     renderScrapeRuns(data.runs || []);
   } catch {
     document.getElementById('scrape-runs').innerHTML = '<p class="text-red-400">Failed to load.</p>';
@@ -154,7 +176,7 @@ function renderScrapeRuns(runs) {
       <div class="run-row py-2.5 flex items-center justify-between">
         <div class="flex items-center gap-2">
           <span class="status-dot ${hasError ? 'bg-red-500' : 'bg-green-500'}"></span>
-          <span class="font-medium text-slate-200">${source}</span>
+          <span class="font-medium text-slate-200">${esc(source)}</span>
           <span class="text-slate-500 text-xs">${ago}</span>
         </div>
         <div class="flex items-center gap-3 text-xs">
@@ -169,8 +191,7 @@ function renderScrapeRuns(runs) {
 
 async function fetchFeedback() {
   try {
-    const r = await fetch('/feedback');
-    const data = await r.json();
+    const data = await api('/feedback');
     renderFeedback(data);
   } catch {
     document.getElementById('feedback-panel').innerHTML = '<p class="text-red-400">Failed to load.</p>';
@@ -179,14 +200,16 @@ async function fetchFeedback() {
 
 function renderFeedback(data) {
   const approvalPct = Math.round((data.overall_approval_rate || 0) * 100);
-  const thresholdColor = data.recommended_threshold > data.current_threshold ? '#f59f00' : '#2f9e44';
+  const rec = data.recommended_threshold;
+  const hasRecommendation = rec != null && rec !== data.current_threshold;
+  const thresholdColor = rec > data.current_threshold ? '#f59f00' : '#2f9e44';
 
   const keywords = (data.keyword_suggestions || []).length
-    ? data.keyword_suggestions.map(k => `<span class="tag">${k}</span>`).join('')
+    ? data.keyword_suggestions.map(k => `<span class="tag">${esc(k)}</span>`).join('')
     : '<span class="text-slate-500">None yet — rescue some skipped jobs first.</span>';
 
   const prefs = typeof data.learned_preferences === 'string' && data.learned_preferences !== 'Not enough decisions yet'
-    ? `<pre class="text-xs text-slate-300 whitespace-pre-wrap bg-slate-800 rounded-lg p-3 mt-2">${data.learned_preferences}</pre>`
+    ? `<pre class="text-xs text-slate-300 whitespace-pre-wrap bg-slate-800 rounded-lg p-3 mt-2">${esc(data.learned_preferences)}</pre>`
     : '<p class="text-slate-500 text-xs mt-1">Not enough decisions yet (need 5+).</p>';
 
   document.getElementById('feedback-panel').innerHTML = `
@@ -208,9 +231,9 @@ function renderFeedback(data) {
     <div class="flex items-center justify-between mb-4 text-xs">
       <span class="text-slate-400">Score threshold</span>
       <span>
-        <span class="text-slate-200 font-semibold">${data.current_threshold}</span>
-        ${data.recommended_threshold !== data.current_threshold
-          ? `<span class="ml-2" style="color:${thresholdColor}">→ ${data.recommended_threshold} recommended</span>`
+        <span class="text-slate-200 font-semibold">${esc(data.current_threshold)}</span>
+        ${hasRecommendation
+          ? `<span class="ml-2" style="color:${thresholdColor}">→ ${esc(rec)} recommended</span>`
           : '<span class="ml-2 text-green-400">✓ optimal</span>'}
       </span>
     </div>
@@ -236,8 +259,7 @@ async function runPhase(phase, btn) {
   result.classList.add('hidden');
 
   try {
-    const r = await fetch(endpoint, { method: 'POST' });
-    const data = await r.json();
+    const data = await api(endpoint, { method: 'POST' });
     result.textContent = `${phase}: ${JSON.stringify(data)}`;
     result.className = 'mt-3 text-sm text-green-400';
     result.classList.remove('hidden');
@@ -262,7 +284,8 @@ function timeAgo(iso) {
 }
 
 async function refresh() {
-  await Promise.all([fetchStats(), fetchScrapeRuns(), fetchFeedback()]);
+  await fetchStats();  // first, so a missing key is prompted for only once
+  await Promise.all([fetchScrapeRuns(), fetchFeedback()]);
   document.getElementById('last-refresh').textContent = 'Updated ' + new Date().toLocaleTimeString();
 }
 

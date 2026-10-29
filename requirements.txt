@@ -3,11 +3,15 @@
 # Run: pip install -r requirements.txt
 # Security audit: pip-audit -r requirements.txt
 
+# ── API ───────────────────────────────────────────────────────────────────
+fastapi==0.145.*
+uvicorn[standard]==0.54.*
+
 # ── HTTP / Scraping ───────────────────────────────────────────────────────
 httpx==0.27.*                  # async HTTP client (scrapers, Telegram, Notion)
 beautifulsoup4==4.12.*         # HTML parsing
-lxml==5.2.*                    # fast HTML/XML parser (bs4 backend)
-playwright==1.44.*             # headless browser for JS-heavy boards (optional)
+lxml==6.1.*                    # fast HTML/XML parser (bs4 backend)
+defusedxml==0.7.*              # Safe XML parsing for RSS feeds
 
 # ── LLM Clients ───────────────────────────────────────────────────────────
 google-genai>=1.0.0,<2.0.0         # Gemini API (Tier 1 scoring) — new official SDK
@@ -15,7 +19,6 @@ groq>=0.9.0,<1.0.0                 # Groq API (Tier 1 scoring — alternative to
 anthropic>=0.40.0,<1.0.0           # Anthropic API (Tier 2 — CV + cover letter generation)
 
 # ── Document Generation ───────────────────────────────────────────────────
-python-docx==1.1.*             # Cover letter .docx generation
 # LaTeX → PDF compilation is done via pdflatex subprocess (no Python package)
 
 # ── Discord ──────────────────────────────────────────────────────────────
@@ -25,18 +28,15 @@ python-docx==1.1.*             # Cover letter .docx generation
 notion-client==2.2.*           # Official Notion API client
 
 # ── Security ─────────────────────────────────────────────────────────────
-cryptography>=42.0.0,<44.0.0      # Ed25519 signature verification for Discord interactions
+cryptography>=50.0.0,<51.0.0      # Ed25519 signature verification for Discord interactions
 
 # ── Utilities ────────────────────────────────────────────────────────────
-python-dotenv==1.0.*           # Load .env files for local dev
+python-dotenv==1.2.*           # Load .env files for local dev
 tenacity==8.3.*                # Retry logic for scrapers and API calls
-ratelimit==2.2.*               # Simple rate-limit decorator
-python-dateutil==2.9.*         # Flexible date parsing from job boards
-bleach==6.1.*                  # HTML sanitisation (extra layer in sanitize.py)
+ftfy==6.3.*                    # Repair mis-decoded UTF-8 in scraped text (RemoteOK)
 
 # ── Testing ───────────────────────────────────────────────────────────────
-pytest==8.2.*
-pytest-asyncio==0.23.*
+pytest==9.0.*
 pytest-cov==5.0.*
 
 # ── Security auditing (dev only) ──────────────────────────────────────────

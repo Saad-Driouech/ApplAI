@@ -23,3 +23,26 @@ jobs:
 
       - name: Run tests
         run: PYTHONPATH=. pytest tests/ -v --tb=short
+
+  security:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install scanners
+        run: pip install "pip-audit==2.7.*" "bandit==1.7.*" "detect-secrets==1.4.*"
+
+      - name: Dependency vulnerabilities
+        run: pip-audit -r requirements.txt
+
+      - name: Static analysis
+        run: bandit -r src -ll -ii -q
+
+      - name: Secrets (new findings vs .secrets.baseline)
+        run: git ls-files -z | xargs -0 detect-secrets-hook --baseline .secrets.baseline

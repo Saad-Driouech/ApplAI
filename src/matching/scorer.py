@@ -15,10 +15,13 @@ from typing import Optional
 
 import src.database as db
 from src.logger import audit, get_logger
-from src.matching.gemini_client import BudgetExceeded, ScoreResult
+from src.matching.gemini_client import BudgetExceeded, ScoreParseError, ScoreResult, http_status
+from src.scrapers.location import REMOTE
 from src.utils.jd_sanitizer import sanitize_jd
 
 log = get_logger(__name__)
+
+_CONFIG_ERROR_STATUS = {401, 403, 404}
 
 # ── Keyword pre-filter ────────────────────────────────────────────────────
 # Jobs that mention NONE of these terms are auto-skipped before LLM scoring.
@@ -49,13 +52,15 @@ _AI_KEYWORDS = {
     "wandb", "weights and biases", "dvc",
     "onnx", "triton", "tensorrt", "vllm",
     # Abbreviations commonly found in JDs
-    "ai/ml", "ml/ai", "ai ", " ai,", " ai.", "(ai)",
-    "cv/nlp", "nlp/cv", "dl ", " dl,", " dl.",
+    "ai", "ai/ml", "ml/ai", "cv/nlp", "nlp/cv", "dl",
 }
 
-# Pre-compile a single regex for speed: match any keyword as a whole word
+# One regex matching any keyword as a whole word (letter/digit boundaries,
+# so keywords containing punctuation like "ai/ml" still work)
 _AI_PATTERN = re.compile(
-    "|".join(re.escape(kw) for kw in sorted(_AI_KEYWORDS, key=len, reverse=True)),
+    r"(?<![a-z0-9])(?:"
+    + "|".join(re.escape(kw) for kw in sorted(_AI_KEYWORDS, key=len, reverse=True))
+    + r")(?![a-z0-9])",
     re.IGNORECASE,
 )
 
@@ -84,6 +89,7 @@ class Scorer:
         batch_size: int = 50,
         user_preferences: str = "",
         fallback_client=None,
+        allowed_countries: Optional[frozenset] = None,
     ):
         self._db_path = db_path
         self._client = client
@@ -92,22 +98,47 @@ class Scorer:
         self._batch_size = batch_size
         self._user_preferences = user_preferences
         self._fallback_client = fallback_client
+        self._allowed_countries = allowed_countries
 
     def run(self) -> dict[str, int]:
         """
-        Score all 'new' jobs in the database.
-        Returns a summary dict: {scored, queued, skipped, filtered, errors, quota_hit}
+        Pre-filter every 'new' job, then LLM-score up to batch_size of them (newest first).
+        Returns a summary dict:
+        {scored, queued, skipped, filtered, not_a_job, deferred, errors, parse_errors, quota_hit}
+
+        Deferred and failed jobs stay 'new' for the next run.
         """
-        stats = {"scored": 0, "queued": 0, "skipped": 0, "filtered": 0, "errors": 0, "quota_hit": 0}
+        stats = {
+            "scored": 0, "queued": 0, "skipped": 0, "filtered": 0, "not_a_job": 0,
+            "deferred": 0, "errors": 0, "parse_errors": 0, "quota_hit": 0,
+        }
 
         with db.get_conn(self._db_path) as conn:
-            jobs = db.get_jobs_by_status(conn, "new", limit=self._batch_size)
+            jobs = db.get_jobs_by_status(conn, "new", limit=None)
 
-        log.info("Scoring batch: %d jobs to evaluate", len(jobs))
+        log.info("Scoring: %d new jobs, up to %d LLM calls", len(jobs), self._batch_size)
+
+        llm_calls = 0
+        llm_stopped = False   # quota exhausted or provider misconfigured
 
         for row in jobs:
             job = dict(row)
             job_id = job["id"]
+
+            # ── Location pre-filter: skip jobs outside target countries ──
+            country = job.get("country")
+            if self._allowed_countries and country != REMOTE and country not in self._allowed_countries:
+                with db.get_conn(self._db_path) as conn:
+                    db.update_score(
+                        conn,
+                        job_id=job_id,
+                        score=0.0,
+                        reasoning=f"Auto-skipped: location outside target countries ({job.get('city') or job.get('country')})",
+                        new_status="skipped",
+                        skip_reason="location",
+                    )
+                stats["filtered"] += 1
+                continue
 
             # ── Keyword pre-filter: skip non-AI jobs without LLM call ────
             if not has_ai_keywords(job.get("title", ""), job.get("description", "")):
@@ -127,6 +158,11 @@ class Scorer:
                 )
                 continue
 
+            if llm_stopped or llm_calls >= self._batch_size:
+                stats["deferred"] += 1
+                continue
+            llm_calls += 1
+
             try:
                 result = self._score_one(job)
             except BudgetExceeded as exc:
@@ -141,14 +177,43 @@ class Scorer:
                     except Exception as fallback_exc:
                         log.error("Fallback scoring failed for job %s: %s", job_id, fallback_exc)
                         stats["errors"] += 1
+                        self._record_failure(job_id, fallback_exc)
                         continue
                 else:
                     log.warning("Quota hit, no fallback available: %s", exc)
                     stats["quota_hit"] += 1
-                    break
+                    stats["deferred"] += 1
+                    llm_stopped = True
+                    continue
+            except ScoreParseError as exc:
+                # Never record an unparseable reply as a score — leave the job for retry
+                log.warning("Unusable model reply for job %s: %s", job_id, exc)
+                stats["parse_errors"] += 1
+                self._record_failure(job_id, exc)
+                continue
             except Exception as exc:
-                log.error("Scoring error for job %s: %s", job_id, exc, exc_info=True)
                 stats["errors"] += 1
+                if http_status(exc) in _CONFIG_ERROR_STATUS:
+                    # Bad key / removed model: every remaining job would fail the same way
+                    log.error("LLM scoring stopped, provider configuration error: %s", exc)
+                    llm_stopped = True
+                    continue
+                log.error("Scoring error for job %s: %s", job_id, exc, exc_info=True)
+                self._record_failure(job_id, exc)
+                continue
+
+            if not result.is_job_posting:
+                with db.get_conn(self._db_path) as conn:
+                    db.update_score(
+                        conn,
+                        job_id=job_id,
+                        score=result.score,
+                        reasoning=result.reasoning,
+                        new_status="skipped",
+                        skip_reason="not_a_job",
+                    )
+                stats["not_a_job"] += 1
+                log.info("Not a job posting, skipped | %s @ %s", job["title"], job["company"])
                 continue
 
             above_threshold = result.score >= self._threshold
@@ -180,6 +245,11 @@ class Scorer:
 
         audit("scoring_run_complete", **stats)
         return stats
+
+    def _record_failure(self, job_id: str, exc: Exception) -> None:
+        with db.get_conn(self._db_path) as conn:
+            if db.record_failure(conn, job_id, "new", f"{type(exc).__name__}: {exc}"):
+                log.error("Giving up on scoring job %s after %d failed attempts", job_id, db.MAX_ATTEMPTS)
 
     def _score_one(self, job: dict) -> ScoreResult:
         """Sanitize the JD, then score it."""

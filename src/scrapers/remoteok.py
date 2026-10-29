@@ -12,6 +12,7 @@ from typing import Any
 
 from src.logger import get_logger
 from src.scrapers.base import BaseScraper, ScraperError
+from src.scrapers.location import infer_remote_country, remote_city
 
 log = get_logger(__name__)
 
@@ -62,7 +63,6 @@ class RemoteOKScraper(BaseScraper):
             raise ValueError("Missing id")
 
         location = item.get("location", "") or ""
-        country = self._infer_country(location)
 
         # RemoteOK uses "position" for job title
         title = item.get("position", "") or item.get("title", "")
@@ -80,27 +80,10 @@ class RemoteOKScraper(BaseScraper):
             "external_id": job_id,
             "title": title,
             "company": item.get("company", ""),
-            "city": "Remote",
-            "country": country,
+            "city": remote_city(location),
+            "country": infer_remote_country(location),
             "salary_info": salary_info,
             "source_url": item.get("url", ""),
             "description": item.get("description", ""),
             "posted_at": item.get("date", ""),
         }
-
-    @staticmethod
-    def _infer_country(location: str) -> str:
-        """Best-effort country tag from RemoteOK's free-text location field."""
-        loc = location.lower()
-        if any(k in loc for k in ("germany", "deutschland", "europe", "eu")):
-            return "DE"
-        if any(k in loc for k in ("uae", "dubai", "emirates")):
-            return "AE"
-        if any(k in loc for k in ("saudi", "riyadh", "ksa")):
-            return "SA"
-        if any(k in loc for k in ("netherlands", "amsterdam", "nl")):
-            return "NL"
-        if any(k in loc for k in ("switzerland", "zurich", "ch")):
-            return "CH"
-        # Worldwide / anywhere / empty → default DE
-        return "DE"

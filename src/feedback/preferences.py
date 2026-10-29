@@ -48,12 +48,15 @@ def build_preference_context(db_path: Path) -> str:
             WHERE a.user_decision IS NOT NULL AND j.score IS NOT NULL
         """).fetchall()
 
-        # Get rescued jobs (treated as implicit approval signal)
+        # Rescued jobs are an implicit approval, unless an explicit decision exists
         rescues = conn.execute("""
             SELECT j.title, j.company, j.country, j.score
             FROM feedback_events fe
             JOIN jobs j ON fe.job_id = j.id
             WHERE fe.event_type = 'rescue'
+              AND fe.job_id NOT IN (
+                  SELECT job_id FROM applications WHERE user_decision IS NOT NULL
+              )
         """).fetchall()
 
     total = len(decisions) + len(rescues)
