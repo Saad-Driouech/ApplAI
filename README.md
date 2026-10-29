@@ -136,8 +136,12 @@ All configuration is via environment variables in `config/.env`. See [`config/.e
 | `POST` | `/digest` | Send skipped jobs digest to Discord for review |
 | `GET` | `/feedback` | Approval stats, threshold recommendation, keyword suggestions |
 | `POST` | `/discord/interactions` | Discord button webhook (Approve/Reject/Rescue) |
+| `POST` | `/jobs/score` | Score one job (pasted text or public https URL) without storing it |
+| `POST` | `/jobs/generate` | Generate a bundle for one job (`job_id` or a new job) into `.pending/`; delivery and approval follow the normal flow |
+| `GET` | `/jobs` | Jobs filtered by `status`, `country`, `company`, `since`, `min_score` |
+| `GET` | `/jobs/duplicates` | Jobs matching a `company` + `title` after dedup normalization |
 
-All routes except `/health` and `/discord/interactions` require the `X-API-Key` header. A phase that is already running returns `409`.
+All routes except `/health` and `/discord/interactions` require the `X-API-Key` header. A phase that is already running returns `409`. The `/jobs/*` routes back the MCP server and use typed request/response models (see `/docs`).
 
 ### Job statuses
 
