@@ -103,28 +103,25 @@ def _expire_stale(cfg) -> int:
     return expired
 
 
-@_exclusive("score")
-def phase_score(cfg) -> dict:
-    """Expire stale jobs, then score 'new' jobs with the Tier-1 LLM."""
-    from src.matching.gemini_client import GeminiClient
-    from src.matching.scorer import Scorer
-
-    expired = _expire_stale(cfg)
-
-    # Profile summary — used for scoring context
+def load_cv_summary(cfg) -> str:
+    """Profile summary used as scoring context, or a placeholder if missing."""
     profile_path = cfg.paths.working_dir / "profile_summary.md"
     if profile_path.exists():
-        cv_summary = profile_path.read_text(encoding="utf-8")
-    else:
-        log.warning(
-            "profile_summary.md not found at %s — using placeholder. "
-            "Create this file for accurate scoring.",
-            profile_path,
-        )
-        cv_summary = (
-            "No profile summary provided. "
-            "Create profile_summary.md in your working directory for accurate scoring."
-        )
+        return profile_path.read_text(encoding="utf-8")
+    log.warning(
+        "profile_summary.md not found at %s — using placeholder. "
+        "Create this file for accurate scoring.",
+        profile_path,
+    )
+    return (
+        "No profile summary provided. "
+        "Create profile_summary.md in your working directory for accurate scoring."
+    )
+
+
+def build_tier1_clients(cfg) -> tuple:
+    """Return (scoring_client, fallback_client) for the configured Tier-1 provider."""
+    from src.matching.gemini_client import GeminiClient
 
     if cfg.tier1_provider == "ollama":
         from src.matching.ollama_client import OllamaClient
@@ -149,11 +146,6 @@ def phase_score(cfg) -> dict:
             rpd=cfg.gemini.requests_per_day,
             usage_db=cfg.paths.db_path,
         )
-    # Build preference context from past decisions (if enough data)
-    from src.feedback.preferences import build_preference_context
-    user_preferences = build_preference_context(cfg.paths.db_path)
-    if user_preferences:
-        log.info("Injecting learned preferences into scoring prompt (%d chars)", len(user_preferences))
 
     # Ollama fallback: if enabled and not already the primary, create a fallback client
     fallback_client = None
@@ -164,6 +156,23 @@ def phase_score(cfg) -> dict:
             model=cfg.ollama.model,
         )
         log.info("Ollama fallback enabled (%s)", cfg.ollama.model)
+    return scoring_client, fallback_client
+
+
+@_exclusive("score")
+def phase_score(cfg) -> dict:
+    """Expire stale jobs, then score 'new' jobs with the Tier-1 LLM."""
+    from src.matching.scorer import Scorer
+
+    expired = _expire_stale(cfg)
+    cv_summary = load_cv_summary(cfg)
+    scoring_client, fallback_client = build_tier1_clients(cfg)
+
+    # Build preference context from past decisions (if enough data)
+    from src.feedback.preferences import build_preference_context
+    user_preferences = build_preference_context(cfg.paths.db_path)
+    if user_preferences:
+        log.info("Injecting learned preferences into scoring prompt (%d chars)", len(user_preferences))
 
     scorer = Scorer(
         db_path=cfg.paths.db_path,
@@ -181,27 +190,39 @@ def phase_score(cfg) -> dict:
     return stats
 
 
-@_exclusive("generate")
-def phase_generate(cfg) -> int:
-    """Generate CV + cover letter for all 'queued' jobs."""
+def resolve_cv_template(name: str | None = None) -> Path:
+    """
+    Map a template name to its path via APPLAI_CV_TEMPLATES ("name=/path,...").
+    No name returns APPLAI_CV_TEMPLATE. Raises ValueError for unknown names.
+    """
+    import os
+
+    if not name:
+        return Path(os.environ.get("APPLAI_CV_TEMPLATE", ""))
+    templates = {}
+    for entry in os.environ.get("APPLAI_CV_TEMPLATES", "").split(","):
+        key, sep, path = entry.partition("=")
+        if sep and key.strip() and path.strip():
+            templates[key.strip()] = Path(path.strip())
+    if name not in templates:
+        raise ValueError(f"Unknown CV template {name!r}; available: {sorted(templates) or 'none'}")
+    return templates[name]
+
+
+def build_generators(cfg, cv_template_path: Path | None = None) -> tuple | None:
+    """Return (cv_gen, cl_gen), or None if a template is missing."""
     from src.documents.cv_generator import CVGenerator
     from src.documents.cover_letter import CoverLetterGenerator
-    from src.utils.file_manager import cleanup_stale_pending
 
     import os
 
-    with db.get_conn(cfg.paths.db_path) as conn:
-        awaiting = {r["id"] for r in conn.execute("SELECT id FROM applications WHERE user_decision IS NULL")}
-    cleanup_stale_pending(cfg.paths.working_dir, keep=awaiting)
-    _expire_stale(cfg)
-
     # CV template
-    cv_template_path = Path(os.environ.get("APPLAI_CV_TEMPLATE", ""))
+    cv_template_path = cv_template_path or resolve_cv_template()
     if not cv_template_path.exists():
         log.error(
             "CV template not found. Set APPLAI_CV_TEMPLATE env var to the path of your .tex file."
         )
-        return 0
+        return None
 
     # Cover letter template
     cl_template_path = Path(os.environ.get("APPLAI_CL_TEMPLATE", ""))
@@ -209,7 +230,7 @@ def phase_generate(cfg) -> int:
         log.error(
             "Cover letter template not found. Set APPLAI_CL_TEMPLATE env var to the path of your .tex file."
         )
-        return 0
+        return None
 
     profile_path = cfg.paths.working_dir / "profile_summary.md"
     if not profile_path.exists():
@@ -218,12 +239,6 @@ def phase_generate(cfg) -> int:
             profile_path,
         )
         profile_path = None
-
-    candidate_name = os.environ.get("CANDIDATE_NAME", "Candidate Name")
-    candidate_email = os.environ.get("CANDIDATE_EMAIL", "candidate@email.com")
-    candidate_address = os.environ.get("CANDIDATE_ADDRESS", "")
-    candidate_phone = os.environ.get("CANDIDATE_PHONE", "")
-    candidate_city = os.environ.get("CANDIDATE_CITY", "")
 
     cv_gen = CVGenerator(
         template_path=cv_template_path,
@@ -235,14 +250,74 @@ def phase_generate(cfg) -> int:
         template_path=cl_template_path,
         output_dir=cfg.paths.working_dir,
         profile_path=profile_path,
-        candidate_name=candidate_name,
-        candidate_email=candidate_email,
-        candidate_address=candidate_address,
-        candidate_phone=candidate_phone,
-        candidate_city=candidate_city,
+        candidate_name=os.environ.get("CANDIDATE_NAME", "Candidate Name"),
+        candidate_email=os.environ.get("CANDIDATE_EMAIL", "candidate@email.com"),
+        candidate_address=os.environ.get("CANDIDATE_ADDRESS", ""),
+        candidate_phone=os.environ.get("CANDIDATE_PHONE", ""),
+        candidate_city=os.environ.get("CANDIDATE_CITY", ""),
     )
+    return cv_gen, cl_gen
 
+
+def generate_one(cfg, job: dict, cv_gen, cl_gen) -> str | None:
+    """
+    Generate a bundle for one 'queued' job into .pending/<app_id>/ and mark it 'ready'.
+    Returns the application id, or None if another run claimed the job.
+    On failure the pending folder is removed, the attempt recorded, and the error re-raised.
+    """
     from src.utils.file_manager import cleanup_pending, pending_dir
+
+    job_id = job["id"]
+    reasoning = job.get("score_reasoning") or ""
+    pending = None
+
+    try:
+        with db.get_conn(cfg.paths.db_path) as conn:
+            if not db.start_generation(conn, job_id):
+                return None
+
+        app_id = str(uuid.uuid4())
+        pending = pending_dir(cfg.paths.working_dir, app_id)
+        pending.mkdir(parents=True, exist_ok=True)
+
+        cv_path = cv_gen.generate(job, gemini_reasoning=reasoning, output_folder=pending)
+        cl_path = cl_gen.generate(job, gemini_reasoning=reasoning, output_folder=pending)
+
+        with db.get_conn(cfg.paths.db_path) as conn:
+            db.create_application(conn, {
+                "id": app_id,
+                "job_id": job_id,
+                "cv_path": str(cv_path),
+                "cover_letter_path": str(cl_path),
+            })
+            db.complete_stage(conn, job_id, "ready")
+    except Exception as exc:
+        if pending is not None:
+            cleanup_pending(pending)
+        with db.get_conn(cfg.paths.db_path) as conn:
+            gave_up = db.record_failure(conn, job_id, "queued", f"{type(exc).__name__}: {exc}")
+        if gave_up:
+            log.error("Giving up on job %s after %d failed attempts", job_id, db.MAX_ATTEMPTS)
+        raise
+
+    log.info("Documents generated for job %s", job_id)
+    return app_id
+
+
+@_exclusive("generate")
+def phase_generate(cfg) -> int:
+    """Generate CV + cover letter for all 'queued' jobs."""
+    from src.utils.file_manager import cleanup_stale_pending
+
+    with db.get_conn(cfg.paths.db_path) as conn:
+        awaiting = {r["id"] for r in conn.execute("SELECT id FROM applications WHERE user_decision IS NULL")}
+    cleanup_stale_pending(cfg.paths.working_dir, keep=awaiting)
+    _expire_stale(cfg)
+
+    generators = build_generators(cfg)
+    if generators is None:
+        return 0
+    cv_gen, cl_gen = generators
 
     generated = 0
     with db.get_conn(cfg.paths.db_path) as conn:
@@ -253,42 +328,11 @@ def phase_generate(cfg) -> int:
 
     for row in jobs:
         job = dict(row)
-        job_id = job["id"]
-        reasoning = job.get("score_reasoning") or ""
-        pending = None
-
         try:
-            with db.get_conn(cfg.paths.db_path) as conn:
-                if not db.start_generation(conn, job_id):
-                    continue  # claimed elsewhere since the batch was read
-
-            app_id = str(uuid.uuid4())
-            pending = pending_dir(cfg.paths.working_dir, app_id)
-            pending.mkdir(parents=True, exist_ok=True)
-
-            cv_path = cv_gen.generate(job, gemini_reasoning=reasoning, output_folder=pending)
-            cl_path = cl_gen.generate(job, gemini_reasoning=reasoning, output_folder=pending)
-
-            with db.get_conn(cfg.paths.db_path) as conn:
-                db.create_application(conn, {
-                    "id": app_id,
-                    "job_id": job_id,
-                    "cv_path": str(cv_path),
-                    "cover_letter_path": str(cl_path),
-                })
-                db.complete_stage(conn, job_id, "ready")
-
-            generated += 1
-            log.info("Documents generated for job %s", job_id)
-
+            if generate_one(cfg, job, cv_gen, cl_gen):
+                generated += 1
         except Exception as exc:
-            log.error("Document generation failed for job %s: %s", job_id, exc, exc_info=True)
-            if pending is not None:
-                cleanup_pending(pending)
-            with db.get_conn(cfg.paths.db_path) as conn:
-                gave_up = db.record_failure(conn, job_id, "queued", f"{type(exc).__name__}: {exc}")
-            if gave_up:
-                log.error("Giving up on job %s after %d failed attempts", job_id, db.MAX_ATTEMPTS)
+            log.error("Document generation failed for job %s: %s", job["id"], exc, exc_info=True)
 
     log.info("Generate phase complete: %d application bundles created", generated)
     return generated
