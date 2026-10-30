@@ -24,6 +24,31 @@ jobs:
       - name: Run tests
         run: PYTHONPATH=. pytest tests/ -v --tb=short
 
+  mcp:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mcp_server
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Run tests
+        run: uv run pytest -v --tb=short
+
+      - name: Static analysis
+        run: uv run bandit -r applai_mcp -ll -ii -q
+
+      - name: Dependency vulnerabilities
+        run: |
+          uv export --locked --no-dev --no-emit-project --format requirements-txt > "$RUNNER_TEMP/mcp-requirements.txt"
+          uv run pip-audit -r "$RUNNER_TEMP/mcp-requirements.txt" --disable-pip
+
   security:
     runs-on: ubuntu-latest
 
