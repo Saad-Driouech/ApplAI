@@ -144,6 +144,10 @@ All configuration is via environment variables in `config/.env`. See [`config/.e
 
 All routes except `/health` and `/discord/interactions` require the `X-API-Key` header. A phase that is already running returns `409`. The `/jobs/*` routes back the MCP server and use typed request/response models (see `/docs`).
 
+### MCP server
+
+[`mcp_server/`](mcp_server/README.md) exposes ApplAI to Claude Desktop and other MCP clients: score or dedupe a posting, list applications across the pipeline and `job_applications/`, and generate documents or run phases behind a human confirmation gate.
+
 ### Job statuses
 
 `new` → `queued` → `generating` → `ready` → `delivered` (sent to Discord) → `approved` / `rejected`.
