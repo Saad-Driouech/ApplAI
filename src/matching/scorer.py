@@ -251,6 +251,17 @@ class Scorer:
             if db.record_failure(conn, job_id, "new", f"{type(exc).__name__}: {exc}"):
                 log.error("Giving up on scoring job %s after %d failed attempts", job_id, db.MAX_ATTEMPTS)
 
+    def score_single(self, job: dict) -> ScoreResult:
+        """Score one job outside the batch flow, switching to the fallback client on quota errors."""
+        try:
+            return self._score_one(job)
+        except BudgetExceeded as exc:
+            if not self._fallback_client:
+                raise
+            log.warning("Quota hit, switching to fallback client: %s", exc)
+            self._client, self._fallback_client = self._fallback_client, None
+            return self._score_one(job)
+
     def _score_one(self, job: dict) -> ScoreResult:
         """Sanitize the JD, then score it."""
         raw_desc = job.get("description") or ""

@@ -9,6 +9,11 @@ Endpoints:
   POST /discord/interactions  — Discord button interaction webhook
   GET  /health                — liveness check
   GET  /stats                 — job counts by status
+  POST /jobs/score            — score one job (text or URL) without storing it
+  POST /jobs/generate         — generate a bundle for one job into .pending/
+  GET  /jobs                  — filtered job listing
+  GET  /jobs/duplicates       — jobs matching a company + title
+  GET  /jobs/{job_id}         — one job with its latest application
 
 All routes except /health and /discord/interactions (Ed25519-verified)
 require the X-API-Key header.
@@ -16,22 +21,50 @@ require the X-API-Key header.
 from __future__ import annotations
 
 import binascii
+import hashlib
 import json
 import os
+import re
 import secrets
 import time
 from pathlib import Path
+from datetime import datetime
 from threading import Lock
+from typing import Optional
 
-from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request, Response
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse
 
 import src.logger as logger_module
 from src.config import get as get_config
 import src.database as db
 from src.logger import audit, get_logger
-from src.pipeline import phase_deliver, phase_generate, phase_score, phase_scrape
-from src.utils.locks import PhaseBusy
+from src.api_models import (
+    COUNTRY_PATTERN,
+    DuplicatesResponse,
+    GenerateRequest,
+    GenerateResponse,
+    JobInput,
+    JobListResponse,
+    JobSummary,
+    ResolvedJob,
+    ScoreResponse,
+)
+from src.matching.scorer import has_ai_keywords
+from src.pipeline import (
+    build_generators,
+    generate_one,
+    phase_deliver,
+    phase_generate,
+    phase_score,
+    phase_scrape,
+    resolve_cv_template,
+    score_single_job,
+)
+from src.scrapers.single_url import JobFetchError, fetch_job_posting
+from src.utils.jd_sanitizer import sanitize_jd
+from src.utils.locks import PhaseBusy, phase_lock
+from src.utils.sanitize import sanitize_job
 
 log = get_logger(__name__)
 
@@ -132,6 +165,223 @@ def scrape_runs():
             LIMIT 30
         """).fetchall()
     return {"runs": [dict(r) for r in rows]}
+
+
+# ── Single-job routes (used by the MCP server) ───────────────────────────
+
+_JOB_STATUSES = r"^(new|queued|generating|ready|delivered|approved|rejected|skipped|failed)$"
+_DONE_STATUSES = {"generating", "ready", "delivered", "approved", "rejected"}
+MCP_SOURCE = "mcp"
+
+
+def _resolve_job(req: JobInput) -> tuple[dict, list[str]]:
+    """
+    Sanitized job dict from pasted text or a fetched URL (explicit fields override fetched ones),
+    plus the JD sanitizer flags. Severe prompt injection is rejected with 422.
+    """
+    if req.url:
+        try:
+            raw = fetch_job_posting(req.url)
+        except JobFetchError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+    else:
+        raw = {"description": req.description}
+    for field in ("title", "company", "city", "country"):
+        if getattr(req, field):
+            raw[field] = getattr(req, field)
+    if not raw.get("external_id"):
+        key = f"{raw.get('company', '')}|{raw.get('title', '')}|{raw['description']}"
+        raw["external_id"] = hashlib.sha256(key.encode()).hexdigest()[:32]
+    job = sanitize_job(raw)
+
+    flags = sanitize_jd(job["description"])
+    if flags["blocked"]:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Job description blocked by the prompt-injection filter ({', '.join(flags['flags'])})",
+        )
+    return job, flags["flags"]
+
+
+def _score(cfg, job: dict):
+    try:
+        return score_single_job(cfg, job)
+    except Exception as exc:
+        log.error("Single-job scoring failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=502, detail=f"Scoring failed: {type(exc).__name__}: {exc}")
+
+
+def _duplicates(cfg, company: str, title: str) -> list[JobSummary]:
+    if not (company and title):
+        return []
+    with db.get_conn(cfg.paths.db_path) as conn:
+        return [JobSummary(**dict(r)) for r in db.find_by_dedup_key(conn, company, title)]
+
+
+@app.post("/jobs/score", dependencies=_auth, response_model=ScoreResponse)
+def score_job(req: JobInput):
+    """Score one job against the profile. Nothing is stored except the LLM usage counter."""
+    cfg = _get_cfg()
+    job, sanitizer_flags = _resolve_job(req)
+    result = _score(cfg, job)
+    return ScoreResponse(
+        score=result.score,
+        threshold=cfg.score_threshold,
+        reasoning=result.reasoning,
+        must_haves_met=result.must_haves_met,
+        gaps=result.gaps,
+        is_job_posting=result.is_job_posting,
+        passes_keyword_filter=has_ai_keywords(job["title"], job["description"]),
+        job=ResolvedJob(
+            title=job["title"], company=job["company"], country=job["country"], city=job["city"],
+            source_url=job["source_url"], description_chars=len(job["description"]),
+        ),
+        duplicates=_duplicates(cfg, job["company"], job["title"]),
+        sanitizer_flags=sanitizer_flags,
+    )
+
+
+def _queue_existing(cfg, job_id: str) -> dict:
+    with db.get_conn(cfg.paths.db_path) as conn:
+        row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    job = dict(row)
+    if job["status"] in _DONE_STATUSES:
+        raise HTTPException(status_code=409, detail=f"Job {job_id} already has documents (status '{job['status']}')")
+    if job["skip_reason"] == "duplicate":
+        originals = _duplicates(cfg, job["company"], job["title"])
+        raise HTTPException(status_code=409, detail={
+            "message": f"Job {job_id} is a duplicate; generate for the original instead",
+            "existing_job_id": originals[0].id if originals else None,
+        })
+
+    if job["score"] is None:
+        # Hold the score lock so a concurrent phase_score cannot re-score this row
+        with phase_lock(cfg.paths.db_path.parent, "score"):
+            result = _score(cfg, job)
+            with db.get_conn(cfg.paths.db_path) as conn:
+                db.update_score(conn, job_id, result.score, result.reasoning, new_status="queued")
+    else:
+        with db.get_conn(cfg.paths.db_path) as conn:
+            db.complete_stage(conn, job_id, "queued")
+
+    with db.get_conn(cfg.paths.db_path) as conn:
+        return dict(conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone())
+
+
+def _queue_new(cfg, req: JobInput) -> dict:
+    from src.scrapers.base import _job_id
+
+    job, _ = _resolve_job(req)
+    if not (job["title"] and job["company"]):
+        raise HTTPException(status_code=422, detail="'title' and 'company' are required to generate documents")
+    if not re.fullmatch(COUNTRY_PATTERN, job["country"]):
+        raise HTTPException(status_code=422, detail="'country' must be an ISO alpha-2 code or REMOTE")
+    job.update(id=_job_id(MCP_SOURCE, job["external_id"]), source=MCP_SOURCE)
+
+    def already_exists(conn) -> None:
+        originals = db.find_by_dedup_key(conn, job["company"], job["title"])
+        if originals or db.job_exists(conn, MCP_SOURCE, job["external_id"]):
+            raise HTTPException(status_code=409, detail={
+                "message": "This job already exists; pass its job_id to generate for it",
+                "existing_job_id": originals[0]["id"] if originals else job["id"],
+            })
+
+    with db.get_conn(cfg.paths.db_path) as conn:
+        already_exists(conn)  # before spending an LLM call
+
+    # Score before inserting so the row is never visible to phase_score as 'new'
+    result = _score(cfg, job)
+    with db.get_conn(cfg.paths.db_path) as conn:
+        if not db.upsert_job(conn, job):
+            already_exists(conn)
+        db.update_score(conn, job["id"], result.score, result.reasoning, new_status="queued")
+        return dict(conn.execute("SELECT * FROM jobs WHERE id = ?", (job["id"],)).fetchone())
+
+
+@app.post("/jobs/generate", dependencies=_auth, response_model=GenerateResponse)
+def generate_job(req: GenerateRequest):
+    """Generate CV + cover letter for one job into .pending/; delivery and approval follow the normal flow."""
+    cfg = _get_cfg()
+    try:
+        cv_template = resolve_cv_template(req.cv_template)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    try:
+        with phase_lock(cfg.paths.db_path.parent, "generate"):
+            generators = build_generators(cfg, cv_template)
+            if generators is None:
+                raise HTTPException(status_code=503, detail="CV or cover letter template is not configured")
+            job = _queue_existing(cfg, req.job_id) if req.job_id else _queue_new(cfg, req.job)
+            try:
+                app_id = generate_one(cfg, job, *generators)
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Generation failed: {type(exc).__name__}: {exc}")
+            if app_id is None:
+                raise HTTPException(status_code=409, detail=f"Job {job['id']} was claimed by another run")
+    except PhaseBusy as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+    with db.get_conn(cfg.paths.db_path) as conn:
+        app_row = conn.execute("SELECT * FROM applications WHERE id = ?", (app_id,)).fetchone()
+        status = conn.execute("SELECT status FROM jobs WHERE id = ?", (job["id"],)).fetchone()["status"]
+    audit("job_generated_on_demand", job_id=job["id"], app_id=app_id)
+    return GenerateResponse(
+        job_id=job["id"],
+        application_id=app_id,
+        status=status,
+        score=job["score"],
+        cv_path=app_row["cv_path"],
+        cover_letter_path=app_row["cover_letter_path"],
+    )
+
+
+@app.get("/jobs", dependencies=_auth, response_model=JobListResponse)
+def list_jobs(
+    status: Optional[str] = Query(None, pattern=_JOB_STATUSES),
+    country: Optional[str] = Query(None, pattern=COUNTRY_PATTERN),
+    company: Optional[str] = Query(None, min_length=1, max_length=150),
+    since: Optional[str] = Query(None, description="ISO date or datetime (UTC) on scraped_at"),
+    min_score: Optional[float] = Query(None, ge=0, le=10),
+    limit: int = Query(50, ge=1, le=500),
+):
+    if since:
+        try:
+            datetime.fromisoformat(since)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="'since' must be an ISO date or datetime")
+    cfg = _get_cfg()
+    with db.get_conn(cfg.paths.db_path) as conn:
+        rows = db.list_jobs(
+            conn, status=status, country=country, company=company,
+            since=since, min_score=min_score, limit=limit,
+        )
+    jobs = [JobSummary(**dict(r)) for r in rows]
+    return JobListResponse(count=len(jobs), jobs=jobs)
+
+
+@app.get("/jobs/duplicates", dependencies=_auth, response_model=DuplicatesResponse)
+def job_duplicates(
+    company: str = Query(..., min_length=1, max_length=150),
+    title: str = Query(..., min_length=1, max_length=200),
+):
+    cfg = _get_cfg()
+    return DuplicatesResponse(
+        dedup_key=db._compute_dedup_key(company, title),
+        matches=_duplicates(cfg, company, title),
+    )
+
+
+@app.get("/jobs/{job_id}", dependencies=_auth, response_model=JobSummary)
+def get_job(job_id: str):
+    cfg = _get_cfg()
+    with db.get_conn(cfg.paths.db_path) as conn:
+        row = db.get_job_summary(conn, job_id)
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    return JobSummary(**dict(row))
 
 
 @app.post("/scrape", dependencies=_auth)
