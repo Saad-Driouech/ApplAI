@@ -13,8 +13,9 @@ async def test_tool_catalogue_and_annotations(make_client):
     async with make_client() as client:
         tools = {t.name: t for t in (await client.list_tools()).tools}
     assert set(tools) == {"score_job", "check_duplicate", "list_applications", "get_stats",
-                          "generate_application", "run_pipeline_phase", "get_pipeline_run"}
-    for name in ("score_job", "check_duplicate", "list_applications", "get_stats", "get_pipeline_run"):
+                          "generate_application", "run_pipeline_phase", "get_pipeline_run", "get_application"}
+    for name in ("score_job", "check_duplicate", "list_applications", "get_stats", "get_pipeline_run",
+                 "get_application"):
         assert tools[name].annotations.read_only_hint is True
     for name in ("generate_application", "run_pipeline_phase"):
         assert tools[name].annotations.read_only_hint is False
