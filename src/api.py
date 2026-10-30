@@ -13,6 +13,7 @@ Endpoints:
   POST /jobs/generate         — generate a bundle for one job into .pending/
   GET  /jobs                  — filtered job listing
   GET  /jobs/duplicates       — jobs matching a company + title
+  GET  /jobs/{job_id}         — one job with its latest application
 
 All routes except /health and /discord/interactions (Ed25519-verified)
 require the X-API-Key header.
@@ -371,6 +372,16 @@ def job_duplicates(
         dedup_key=db._compute_dedup_key(company, title),
         matches=_duplicates(cfg, company, title),
     )
+
+
+@app.get("/jobs/{job_id}", dependencies=_auth, response_model=JobSummary)
+def get_job(job_id: str):
+    cfg = _get_cfg()
+    with db.get_conn(cfg.paths.db_path) as conn:
+        row = db.get_job_summary(conn, job_id)
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    return JobSummary(**dict(row))
 
 
 @app.post("/scrape", dependencies=_auth)

@@ -73,6 +73,7 @@ def _row(cfg, job_id):
 
 @pytest.mark.parametrize("method,path", [
     ("post", "/jobs/score"), ("post", "/jobs/generate"), ("get", "/jobs"), ("get", "/jobs/duplicates"),
+    ("get", "/jobs/j1"),
 ])
 def test_routes_require_api_key(client, method, path):
     assert getattr(client, method)(path).status_code == 401
@@ -266,3 +267,14 @@ def test_duplicates_normalize_company_and_title(client, cfg):
     body = resp.json()
     assert body["dedup_key"] == "acme gmbh|ai engineer"
     assert [m["id"] for m in body["matches"]] == ["j1"]
+
+
+def test_get_job(client, cfg):
+    _insert(cfg, "j1", status="queued", score=8.0)
+    with db.get_conn(cfg.paths.db_path) as conn:
+        db.create_application(conn, {"id": "a1", "job_id": "j1", "cv_path": "x", "cover_letter_path": "y"})
+    body = client.get("/jobs/j1", headers=KEY).json()
+    assert (body["id"], body["score"], body["application_id"]) == ("j1", 8.0, "a1")
+    assert client.get("/jobs/nope", headers=KEY).status_code == 404
+    assert client.get("/jobs/duplicates", params={"company": "Acme", "title": "ML Engineer"},
+                      headers=KEY).status_code == 200  # not shadowed by /jobs/{job_id}

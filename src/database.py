@@ -539,6 +539,18 @@ def list_jobs(
     return conn.execute(sql, (*params, limit)).fetchall()
 
 
+def get_job_summary(conn: sqlite3.Connection, job_id: str) -> Optional[sqlite3.Row]:
+    """One job joined with its latest application, or None."""
+    # Interpolates module constants only; the id is a bound parameter
+    sql = f"""
+        SELECT {_JOB_LIST_COLUMNS}
+        FROM jobs j
+        LEFT JOIN applications a ON a.id = ({_LATEST_APPLICATION})
+        WHERE j.id = ?
+    """  # nosec B608
+    return conn.execute(sql, (job_id,)).fetchone()
+
+
 def find_by_dedup_key(conn: sqlite3.Connection, company: str, title: str) -> list[sqlite3.Row]:
     """Original (non-duplicate) jobs whose normalized company+title matches."""
     # Interpolates module constants only; the key is a bound parameter

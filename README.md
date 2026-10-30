@@ -140,6 +140,7 @@ All configuration is via environment variables in `config/.env`. See [`config/.e
 | `POST` | `/jobs/generate` | Generate a bundle for one job (`job_id` or a new job) into `.pending/`; delivery and approval follow the normal flow |
 | `GET` | `/jobs` | Jobs filtered by `status`, `country`, `company`, `since`, `min_score` |
 | `GET` | `/jobs/duplicates` | Jobs matching a `company` + `title` after dedup normalization |
+| `GET` | `/jobs/{job_id}` | One job with its latest application |
 
 All routes except `/health` and `/discord/interactions` require the `X-API-Key` header. A phase that is already running returns `409`. The `/jobs/*` routes back the MCP server and use typed request/response models (see `/docs`).
 
