@@ -50,6 +50,10 @@ class JobSummary(BaseModel):
     decision_at: Optional[str] = None
 
 
+class JobDetail(JobSummary):
+    description: Optional[str] = None
+
+
 class ResolvedJob(BaseModel):
     title: str
     company: str

@@ -8,7 +8,7 @@ import httpx2
 
 from applai_mcp import errors
 from applai_mcp.config import Settings
-from applai_mcp.models import JobSummary, ScoreResult
+from applai_mcp.models import JobDetail, JobSummary, ScoreResult
 
 PHASES = ("scrape", "score", "generate", "deliver")
 
@@ -47,8 +47,8 @@ class ApplAIClient:
         return await self._request("POST", "/jobs/generate", json=payload,
                                    timeout=self._settings.generate_timeout_seconds)
 
-    async def get_job(self, job_id: str) -> JobSummary:
-        return JobSummary.model_validate(await self._request("GET", f"/jobs/{quote(job_id, safe='')}"))
+    async def get_job(self, job_id: str) -> JobDetail:
+        return JobDetail.model_validate(await self._request("GET", f"/jobs/{quote(job_id, safe='')}"))
 
     async def list_jobs(self, **filters: Any) -> list[JobSummary]:
         params = {k: v for k, v in filters.items() if v is not None}

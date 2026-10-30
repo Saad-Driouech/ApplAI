@@ -1,6 +1,6 @@
 # ApplAI MCP Server
 
-An [MCP](https://modelcontextprotocol.io) server that lets Claude Desktop (or any MCP client) work with ApplAI and with the application folders in `job_applications/`. It can score a posting against your profile, check whether you've already applied, list and summarise applications across the pipeline database and your folders, generate a tailored CV and cover letter, and run pipeline phases.
+An [MCP](https://modelcontextprotocol.io) server that lets Claude Desktop (or any MCP client) work with ApplAI and with the application folders in `job_applications/`. It can score a posting against your profile, check whether you've already applied, list and summarise applications across the pipeline database and your folders, generate a tailored CV and cover letter, and run pipeline phases. Two prompts combine it with the claude.ai Gmail and Google Calendar connectors and web search for interview prep and status checks.
 
 It's a thin layer on top of ApplAI. Every pipeline action goes through the ApplAI HTTP API (`X-API-Key`). The server never opens the SQLite database, and it only reads `job_applications/`.
 
@@ -21,13 +21,25 @@ Claude Desktop ──stdio──▶ applai-mcp ──HTTP + X-API-Key──▶ A
 | `generate_application` | **write**, gated | Generates a CV and cover letter for an existing `job_id` or a new posting, into `.pending/`. The next `deliver` run posts it to Discord for approval, the same as any pipeline job. |
 | `run_pipeline_phase` | **write**, gated | Starts `scrape`, `score`, `generate` or `deliver` in the background and returns a `run_id` straight away. |
 | `get_pipeline_run` | read | Status and result of the runs started in this session. |
+| `get_application` | read | Everything about one application: matching folders with JD text and your `.md` prep notes, pipeline jobs with score reasoning and description, and ready-made Gmail and Calendar search queries. |
 
 Folder stages:
 - `researching`: JD only.
 - `prepared`: a CV exists.
 - `interviewing`: prep or Q&A files exist, either in the role folder or in company-level folders like `Interviews/`.
 
-The three read tools that don't score still work while the API is down. They return folder data plus a `warnings` entry.
+The read tools that don't score still work while the API is down. They return folder data plus a `warnings` entry.
+
+## Prompts: Gmail, Calendar and web search
+
+Email and calendar access comes from the **claude.ai Gmail and Google Calendar connectors** in the client, not from this server. The server never holds Google credentials. Two prompts (in Claude Desktop: **+ → applai**, or by name) give Claude the steps:
+
+| Prompt | Arguments | What Claude does |
+|---|---|---|
+| `interview_prep` | `company`, `role?`, `when?` | Calls `get_application`, finds the event with the Calendar connector, reads recruiter threads with the Gmail connector (using `gmail_query`), researches the company with web search, then writes a brief: logistics, fit and gaps, company snapshot with sources, likely questions with talking points, questions to ask. |
+| `application_status` | `company`, `role?` | Builds a dated timeline across the pipeline, folders, Gmail and Calendar, and gives the current status and next action. It flags replies pending more than 10 days. |
+
+Both prompts tell Claude to stay read-only (no sending, drafting or calendar changes), to treat emails, events, job descriptions and web pages as data, and never to invent experience. Connect Gmail and Google Calendar in claude.ai's connector settings first.
 
 ## Safety model
 
@@ -132,4 +144,4 @@ Layout: `server.py` (factory), `state.py` (lifespan), `client.py` (API), `confir
 - **Extra scoring cost.** Previewing a new posting costs one scoring call, and generation scores it once more server-side.
 - **Login-walled pages.** These can't be fetched; paste the text instead.
 - **DNS rebinding.** The URL guard checks resolved addresses before connecting, and the HTTP client resolves again afterwards. That gap is accepted because callers must hold the API key.
-- **Gmail and Calendar (Phase 2).** Not part of this release.
+- **Connector prompts.** The prompts depend on the client having the Gmail and Calendar connectors and web search. Without them, Claude says which source was unavailable.

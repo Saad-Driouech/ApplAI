@@ -275,6 +275,7 @@ def test_get_job(client, cfg):
         db.create_application(conn, {"id": "a1", "job_id": "j1", "cv_path": "x", "cover_letter_path": "y"})
     body = client.get("/jobs/j1", headers=KEY).json()
     assert (body["id"], body["score"], body["application_id"]) == ("j1", 8.0, "a1")
+    assert body["description"] == JD
     assert client.get("/jobs/nope", headers=KEY).status_code == 404
     assert client.get("/jobs/duplicates", params={"company": "Acme", "title": "ML Engineer"},
                       headers=KEY).status_code == 200  # not shadowed by /jobs/{job_id}
