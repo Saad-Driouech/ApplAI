@@ -32,11 +32,12 @@ def _tokenize_title(title: str) -> list[str]:
     return [w.lower() for w in words if w.lower() not in _STOP_WORDS]
 
 
-def build_preference_context(db_path: Path) -> str:
+def build_preference_context(db_path: Path, since: str = "") -> str:
     """
     Analyze historical decisions and return a natural-language preference
     summary to inject into the scoring prompt.
 
+    Only decisions and rescues made on or after `since` (ISO date) count.
     Returns empty string if not enough decisions yet.
     """
     with db.get_conn(db_path) as conn:
@@ -46,18 +47,19 @@ def build_preference_context(db_path: Path) -> str:
             FROM applications a
             JOIN jobs j ON a.job_id = j.id
             WHERE a.user_decision IS NOT NULL AND j.score IS NOT NULL
-        """).fetchall()
+              AND COALESCE(a.decision_at, '') >= ?
+        """, (since,)).fetchall()
 
         # Rescued jobs are an implicit approval, unless an explicit decision exists
         rescues = conn.execute("""
             SELECT j.title, j.company, j.country, j.score
             FROM feedback_events fe
             JOIN jobs j ON fe.job_id = j.id
-            WHERE fe.event_type = 'rescue'
+            WHERE fe.event_type = 'rescue' AND fe.created_at >= ?
               AND fe.job_id NOT IN (
                   SELECT job_id FROM applications WHERE user_decision IS NOT NULL
               )
-        """).fetchall()
+        """, (since,)).fetchall()
 
     total = len(decisions) + len(rescues)
     if total < MIN_DECISIONS:

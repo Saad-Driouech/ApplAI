@@ -111,6 +111,7 @@ All configuration is via environment variables in `config/.env`. See [`config/.e
 | `JOB_MAX_AGE_DAYS` | Unscored/ungenerated jobs older than this expire | `30` |
 | `SCORE_BATCH_SIZE` | Max LLM scoring calls per run | `50` |
 | `GENERATE_BATCH_SIZE` | Max document bundles generated per run | `10` |
+| `PREFERENCES_SINCE` | Only decisions on or after this date (`YYYY-MM-DD`) feed the learned scoring preferences | — (all) |
 | `DISCORD_ALLOWED_USER_IDS` | Comma-separated Discord user IDs allowed to decide | anyone |
 | `APPLAI_WORKING_DIR` | Directory for job applications and profile files | — |
 | `APPLAI_CV_TEMPLATE` | Path to your LaTeX CV template | — |

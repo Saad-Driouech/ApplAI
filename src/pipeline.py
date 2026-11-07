@@ -173,7 +173,7 @@ def phase_score(cfg) -> dict:
 
     # Build preference context from past decisions (if enough data)
     from src.feedback.preferences import build_preference_context
-    user_preferences = build_preference_context(cfg.paths.db_path)
+    user_preferences = build_preference_context(cfg.paths.db_path, since=cfg.preferences_since)
     if user_preferences:
         log.info("Injecting learned preferences into scoring prompt (%d chars)", len(user_preferences))
 
@@ -204,7 +204,7 @@ def score_single_job(cfg, job: dict):
         client=scoring_client,
         cv_summary=load_cv_summary(cfg),
         score_threshold=cfg.score_threshold,
-        user_preferences=build_preference_context(cfg.paths.db_path),
+        user_preferences=build_preference_context(cfg.paths.db_path, since=cfg.preferences_since),
         fallback_client=fallback_client,
     )
     return scorer.score_single({"id": job.get("id", "adhoc"), **job})

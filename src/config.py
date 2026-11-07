@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 from typing import Optional
 
@@ -104,6 +105,7 @@ class AppConfig:
     job_max_age_days: int = 30        # unscored/ungenerated jobs older than this expire
     score_batch_size: int = 50        # max LLM scoring calls per run
     generate_batch_size: int = 10     # max document bundles generated per run
+    preferences_since: str = ""       # ISO date; earlier decisions are ignored when learning preferences
     debug: bool = False
 
 
@@ -180,6 +182,15 @@ def load() -> AppConfig:
             "LLM_TIER1_PROVIDER=groq requires GROQ_API_KEY to be set."
         )
 
+    preferences_since = _optional("PREFERENCES_SINCE", "")
+    if preferences_since:
+        try:
+            date.fromisoformat(preferences_since)
+        except ValueError:
+            raise EnvironmentError(
+                f"PREFERENCES_SINCE must be an ISO date (YYYY-MM-DD), got '{preferences_since}'"
+            ) from None
+
     return AppConfig(
         gemini=gemini,
         groq=groq,
@@ -195,6 +206,7 @@ def load() -> AppConfig:
         job_max_age_days=int(_optional("JOB_MAX_AGE_DAYS", "30")),
         score_batch_size=int(_optional("SCORE_BATCH_SIZE", "50")),
         generate_batch_size=int(_optional("GENERATE_BATCH_SIZE", "10")),
+        preferences_since=preferences_since,
         debug=_optional("APPLAI_DEBUG", "false").lower() == "true",
     )
 

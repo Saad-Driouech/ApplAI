@@ -129,7 +129,7 @@ def feedback():
     from src.feedback.preferences import build_preference_context, suggest_keyword_additions
     cfg = _get_cfg()
     report = analyze(cfg.paths.db_path, current_threshold=cfg.score_threshold)
-    preferences = build_preference_context(cfg.paths.db_path)
+    preferences = build_preference_context(cfg.paths.db_path, since=cfg.preferences_since)
     keyword_suggestions = suggest_keyword_additions(cfg.paths.db_path)
     return {
         "total_decisions": report.total_decisions,
