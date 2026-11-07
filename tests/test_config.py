@@ -62,3 +62,15 @@ class TestConfigLoad:
         _patch_env(monkeypatch, {"SCORE_BATCH_SIZE": "20", "GENERATE_BATCH_SIZE": "3"})
         cfg = config_module.load()
         assert (cfg.score_batch_size, cfg.generate_batch_size) == (20, 3)
+
+    def test_preferences_since(self, monkeypatch):
+        _patch_env(monkeypatch, {})
+        monkeypatch.delenv("PREFERENCES_SINCE", raising=False)
+        assert config_module.load().preferences_since == ""
+        monkeypatch.setenv("PREFERENCES_SINCE", "2026-11-07")
+        assert config_module.load().preferences_since == "2026-11-07"
+
+    def test_invalid_preferences_since_raises(self, monkeypatch):
+        _patch_env(monkeypatch, {"PREFERENCES_SINCE": "07.11.2026"})
+        with pytest.raises(EnvironmentError, match="PREFERENCES_SINCE"):
+            config_module.load()

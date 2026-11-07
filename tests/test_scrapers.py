@@ -1,4 +1,7 @@
 """Tests for scraper _map_item methods and remote location inference."""
+from datetime import date
+from types import SimpleNamespace
+
 import pytest
 
 from src.scrapers.location import infer_onsite_country, infer_remote_country
@@ -6,6 +9,7 @@ from src.scrapers.remoteok import RemoteOKScraper
 from src.scrapers.remotive import RemotiveScraper
 from src.scrapers.arbeitnow import ArbeitnowScraper
 from src.scrapers.adzuna import AdzunaScraper
+from src.scrapers.englishjobs import EnglishJobsScraper, _parse_listing_date
 
 
 # ── RemoteOK ──────────────────────────────────────────────────────────────
@@ -205,3 +209,79 @@ def test_arbeitnow_posted_at_is_iso():
     item = {"slug": "ml-eng", "title": "ML Engineer", "company_name": "Acme", "location": "Berlin", "created_at": 1774341045}
     assert ArbeitnowScraper.__new__(ArbeitnowScraper)._map_item(item)["posted_at"] == "2026-03-24T08:30:45+00:00"
     assert _iso_from_epoch(None) == ""
+
+
+# ── EnglishJobs ───────────────────────────────────────────────────────────
+
+def _englishjobs_card(job_id="ee61dff84d9c9495", company="AstraZeneca", facts=("München", "October 23")):
+    company_li = f'<li class="flex text-sm break-words"><svg></svg> {company}</li>' if company else ""
+    fact_lis = "".join(f'<li class="flex text-sm"><svg></svg> {f}</li>' for f in facts)
+    return (
+        f'<div id="{job_id}" class="job js-job"><div class="p-3">'
+        f'<a href="/clickout/{job_id}?sig=abc&amp;p=1" class="js-joblink">'
+        f'<h3 itemprop="title">Senior <em>Python</em> Engineer</h3></a>'
+        f'<ul>{company_li}{fact_lis}</ul>'
+        f'<div class="mr-4 flex-1 text-gray-400">Strong <em>Python</em>\n skills.</div>'
+        f'</div></div>'
+    )
+
+
+class TestEnglishJobsParse:
+    def _scraper(self):
+        return EnglishJobsScraper.__new__(EnglishJobsScraper)
+
+    def test_maps_required_fields(self):
+        [job] = self._scraper()._parse(_englishjobs_card())
+        assert job["external_id"] == "ee61dff84d9c9495"
+        assert job["title"] == "Senior Python Engineer"
+        assert job["company"] == "AstraZeneca"
+        assert job["city"] == "München"
+        assert job["country"] == "DE"
+        assert job["source_url"] == "https://englishjobs.de/clickout/ee61dff84d9c9495"
+        assert job["description"] == "Strong Python skills."
+        assert job["posted_at"].endswith("-10-23")
+
+    def test_tags_appended_to_description(self):
+        [job] = self._scraper()._parse(_englishjobs_card(facts=("Berlin", "November 5", "remote work", "student")))
+        assert job["city"] == "Berlin"
+        assert job["description"].endswith("Tags: remote work, student")
+
+    def test_missing_company_keeps_location(self):
+        [job] = self._scraper()._parse(_englishjobs_card(company=""))
+        assert job["company"] == ""
+        assert job["city"] == "München"
+
+    def test_card_without_link_skipped(self):
+        html = '<div id="abc" class="job js-job"><h3>Engineer</h3></div>' + _englishjobs_card()
+        assert len(self._scraper()._parse(html)) == 1
+
+    @pytest.mark.parametrize("text,expected", [
+        ("November 2", "2026-11-02"),
+        ("December 30", "2025-12-30"),
+        ("March 1, 2024", "2024-03-01"),
+        ("remote work", ""),
+        ("February 30", ""),
+    ])
+    def test_listing_date(self, text, expected):
+        assert _parse_listing_date(text, today=date(2026, 11, 5)) == expected
+
+    def test_or_query_split_and_deduped(self, monkeypatch):
+        scraper = self._scraper()
+        scraper._max_pages = 3
+        pages = {
+            ("AI_Engineer", None): _englishjobs_card("a1") + _englishjobs_card("shared"),
+            ("Data_Scientist", None): _englishjobs_card("shared") + _englishjobs_card("d1"),
+        }
+        calls = []
+
+        def fake_get(url, params=None):
+            calls.append(params)
+            return SimpleNamespace(text=pages.get((url.rsplit("/", 1)[1], params.get("page")), ""))
+
+        monkeypatch.setattr(scraper, "_get", fake_get)
+        jobs = scraper._fetch_jobs("AI Engineer OR Data Scientist", "Germany")
+
+        assert sorted(j["external_id"] for j in jobs) == ["a1", "d1", "shared"]
+        # Paging stops at the first empty page of each term
+        assert len(calls) == 4
+        assert all(p["sort"] == "date" for p in calls)

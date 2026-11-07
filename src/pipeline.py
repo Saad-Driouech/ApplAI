@@ -51,6 +51,7 @@ _SCRAPE_QUERY = "Machine Learning Engineer OR AI Engineer OR Applied AI Research
 
 def _build_scrapers(cfg, db_path: Path) -> list:
     from src.scrapers.arbeitnow import ArbeitnowScraper
+    from src.scrapers.englishjobs import EnglishJobsScraper
     from src.scrapers.remotive import RemotiveScraper
     from src.scrapers.remoteok import RemoteOKScraper
 
@@ -59,6 +60,8 @@ def _build_scrapers(cfg, db_path: Path) -> list:
     # ── Active scrapers ───────────────────────────────────────────────────
     # Arbeitnow: Germany tech jobs, free API
     scrapers.append(ArbeitnowScraper(db_path))
+    # EnglishJobs.de: English-speaking jobs in Germany, HTML listing
+    scrapers.append(EnglishJobsScraper(db_path))
     # Remotive: remote ML/AI roles globally, free API
     scrapers.append(RemotiveScraper(db_path))
     # RemoteOK: remote tech jobs globally, free public JSON API
@@ -86,7 +89,7 @@ def phase_scrape(cfg) -> int:
     scrapers = _build_scrapers(cfg, cfg.paths.db_path)
     total_new = 0
 
-    # Only Arbeitnow uses these; the other sources filter by category or their own query
+    # Only Arbeitnow and EnglishJobs use the query; the other sources filter by category or their own query
     for scraper in scrapers:
         new_jobs = scraper.run(query=_SCRAPE_QUERY, location="Germany")
         total_new += len(new_jobs)
@@ -170,7 +173,7 @@ def phase_score(cfg) -> dict:
 
     # Build preference context from past decisions (if enough data)
     from src.feedback.preferences import build_preference_context
-    user_preferences = build_preference_context(cfg.paths.db_path)
+    user_preferences = build_preference_context(cfg.paths.db_path, since=cfg.preferences_since)
     if user_preferences:
         log.info("Injecting learned preferences into scoring prompt (%d chars)", len(user_preferences))
 
@@ -201,7 +204,7 @@ def score_single_job(cfg, job: dict):
         client=scoring_client,
         cv_summary=load_cv_summary(cfg),
         score_threshold=cfg.score_threshold,
-        user_preferences=build_preference_context(cfg.paths.db_path),
+        user_preferences=build_preference_context(cfg.paths.db_path, since=cfg.preferences_since),
         fallback_client=fallback_client,
     )
     return scorer.score_single({"id": job.get("id", "adhoc"), **job})

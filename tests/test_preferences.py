@@ -130,6 +130,23 @@ class TestBuildPreferenceContext:
         assert "DE" in result
         assert "SA" in result
 
+    def test_since_ignores_earlier_decisions_and_rescues(self):
+        db_path = _db()
+        for i in range(6):
+            _approve(db_path, _make_job(db_path, f"Technical Lead {i}", ext_id=f"old-{i}"))
+        rescued = _make_job(db_path, "Growth Lead", ext_id="rescued")
+        with get_conn(db_path) as conn:
+            record_feedback_event(conn, rescued, "rescue")
+
+        assert build_preference_context(db_path) != ""
+        assert build_preference_context(db_path, since="2999-01-01") == ""
+
+    def test_since_keeps_decisions_on_or_after_the_date(self):
+        db_path = _db()
+        for i in range(5):
+            _approve(db_path, _make_job(db_path, f"ML Engineer {i}", ext_id=f"new-{i}"))
+        assert "5 past decisions" in build_preference_context(db_path, since="2000-01-01")
+
 
 class TestSuggestKeywordAdditions:
     def test_returns_empty_when_no_rescued_jobs(self):

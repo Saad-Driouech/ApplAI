@@ -37,7 +37,7 @@ DONE_STATUSES = {"generating", "ready", "delivered", "approved", "rejected"}
 WRITE = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=True)
 
 PHASE_EFFECTS = {
-    "scrape": ["Query the job boards (Arbeitnow, Remotive, RemoteOK, Adzuna if configured)",
+    "scrape": ["Query the job boards (Arbeitnow, EnglishJobs.de, Remotive, RemoteOK, Adzuna if configured)",
                "Insert newly found jobs into the ApplAI database"],
     "score": ["Mark jobs older than JOB_MAX_AGE_DAYS as expired",
               "Score a batch of 'new' jobs with the Tier-1 LLM (uses daily API quota)"],

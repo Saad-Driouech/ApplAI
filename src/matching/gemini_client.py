@@ -57,9 +57,16 @@ Return ONLY a JSON object with exactly these keys, in this order:
   7-9:  Strong fit — meets most requirements, minor gaps are learnable
   5-7:  Decent fit — relevant AI/ML background, some requirements unmet
   3-5:  Weak fit — tangential overlap, significant gaps
-  0-3:  No fit — completely different domain or seniority
+  0-3:  No fit — not an AI/ML role, or completely different domain or seniority
 
 ## Scoring Guidelines
+- Score the fit between the candidate and this role's day-to-day work, not how strong the \
+candidate is in general.
+- First decide whether the role itself is an AI/ML role: its core work is building, training, \
+evaluating, deploying or researching ML/AI systems (including LLM, agent and data science work). \
+Roles that only use AI tools or sit in an AI company but whose core work is something else \
+(growth, marketing, sales, go-to-market, consulting, product or engineering management, IT support, \
+generic software engineering) are not AI/ML roles: score them 0-3, however strong the candidate is.
 - AI/ML roles where the candidate has relevant experience should start at 5.0 minimum, \
 even if not every listed requirement is met. Transferable ML skills matter.
 - Weigh core technical skills (Python, ML frameworks, model development) more than \

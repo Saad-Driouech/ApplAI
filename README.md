@@ -18,7 +18,7 @@ Scrapes job boards, scores relevance with LLMs, generates tailored CVs and cover
 
 ## Features
 
-- **Multi-source scraping** — Arbeitnow (Germany), Remotive (global remote), RemoteOK (global remote), Adzuna (DE/AE/NL/CH, optional API key), with extensible scraper base class
+- **Multi-source scraping** — Arbeitnow (Germany), EnglishJobs.de (English-speaking jobs in Germany), Remotive (global remote), RemoteOK (global remote), Adzuna (DE/AE/NL/CH, optional API key), with extensible scraper base class
 - **LLM-powered scoring** — Gemini 2.5 Flash (free tier) or Groq as Tier 1 scorer; configurable threshold (default 6.0/10)
 - **AI keyword pre-filter** — Jobs without AI/ML keywords in title or description are auto-skipped before LLM scoring, saving API quota
 - **Document generation** — Anthropic API tailors a LaTeX CV and a LaTeX cover letter, both compiled to PDF
@@ -111,6 +111,7 @@ All configuration is via environment variables in `config/.env`. See [`config/.e
 | `JOB_MAX_AGE_DAYS` | Unscored/ungenerated jobs older than this expire | `30` |
 | `SCORE_BATCH_SIZE` | Max LLM scoring calls per run | `50` |
 | `GENERATE_BATCH_SIZE` | Max document bundles generated per run | `10` |
+| `PREFERENCES_SINCE` | Only decisions on or after this date (`YYYY-MM-DD`) feed the learned scoring preferences | — (all) |
 | `DISCORD_ALLOWED_USER_IDS` | Comma-separated Discord user IDs allowed to decide | anyone |
 | `APPLAI_WORKING_DIR` | Directory for job applications and profile files | — |
 | `APPLAI_CV_TEMPLATE` | Path to your LaTeX CV template | — |
@@ -172,6 +173,7 @@ applai/
 │   ├── scrapers/
 │   │   ├── base.py             # Abstract base with retry + dedup
 │   │   ├── arbeitnow.py        # Germany tech jobs
+│   │   ├── englishjobs.py      # English-speaking jobs in Germany (HTML listing)
 │   │   ├── remotive.py         # Global remote jobs (free API)
 │   │   ├── remoteok.py         # Global remote jobs (free public API)
 │   │   └── adzuna.py           # DE/AE/NL/CH jobs (free API key required)
@@ -224,7 +226,7 @@ applai/
 
 ## Current Progress
 
-- [x] Job scraping (Arbeitnow, Remotive, RemoteOK, Adzuna)
+- [x] Job scraping (Arbeitnow, EnglishJobs.de, Remotive, RemoteOK, Adzuna)
 - [x] LLM scoring (Gemini Flash, Groq)
 - [x] CV generation (LaTeX → PDF via Anthropic API)
 - [x] Cover letter generation (LaTeX → PDF via Anthropic API)
