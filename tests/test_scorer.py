@@ -203,9 +203,24 @@ class TestHasAiKeywords:
     def test_keywords_only_match_whole_words(self, title):
         assert has_ai_keywords(title, "") is False
 
-    @pytest.mark.parametrize("text", ["AI-powered search", "an AI startup", "AI/ML platform", "DL models"])
-    def test_ai_abbreviations_match(self, text):
-        assert has_ai_keywords("Engineer", text) is True
+    @pytest.mark.parametrize("title", ["AI-powered Search Engineer", "Senior AI Engineer", "DL Researcher",
+                                       "KI & Automation Lead", "Werkstudent KI-Entwicklung"])
+    def test_ai_abbreviations_match_in_title(self, title):
+        assert has_ai_keywords(title, "") is True
+
+    def test_ai_ml_abbreviation_matches_in_description(self):
+        assert has_ai_keywords("Engineer", "Build our AI/ML platform.") is True
+
+    @pytest.mark.parametrize("text", [
+        "Ein Team, das AI als festen Bestandteil der täglichen Arbeit sieht.",
+        "We are an AI startup using KI tools and pandas dashboards.",
+    ])
+    def test_generic_terms_in_description_only_do_not_match(self, text):
+        assert has_ai_keywords("Growth Lead (m/w/d)", text) is False
+
+    @pytest.mark.parametrize("text", ["Lösungen mit künstlicher Intelligenz", "Projekte im Bereich Künstliche Intelligenz"])
+    def test_german_ai_term_matches_in_description(self, text):
+        assert has_ai_keywords("Entwickler (m/w/d)", text) is True
 
     def test_no_false_positive_training_role(self):
         """A generic 'Training Manager' role without AI context should not match."""
@@ -231,3 +246,9 @@ class TestScorePrompt:
     def test_prompt_states_location_eligibility_rule(self):
         from src.matching.gemini_client import build_score_prompt
         assert "Location eligibility is a hard blocker" in build_score_prompt({}, "cv")
+
+    def test_prompt_caps_non_ai_roles(self):
+        from src.matching.gemini_client import build_score_prompt
+        prompt = build_score_prompt({}, "cv")
+        assert "are not AI/ML roles: score them 0-3" in prompt
+        assert "not how strong the candidate is in general" in prompt

@@ -4,8 +4,8 @@ Job scoring orchestrator.
 Reads 'new' jobs from the database, sends each through the Gemini client,
 stores the score, and marks jobs as 'queued' (above threshold) or 'skipped'.
 
-A keyword pre-filter runs first: jobs whose title + description contain zero
-AI/ML-related terms are auto-skipped without an LLM call (saves quota).
+A keyword pre-filter runs first: jobs with no AI/ML keyword in the title and no
+specific AI/ML term in the description are auto-skipped without an LLM call (saves quota).
 """
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ _AI_KEYWORDS = {
     "vector database", "retrieval augmented", "fine-tuning",
     "prompt engineering", "mlops", "aiops", "data science",
     "data scientist", "ml engineer", "ai engineer", "applied scientist",
-    "research scientist", "ai researcher",
+    "research scientist", "ai researcher", "künstliche intelligenz", "künstlicher intelligenz",
     # Frameworks and libraries
     "pytorch", "tensorflow", "keras", "scikit-learn", "sklearn",
     "hugging face", "huggingface", "langchain", "llamaindex",
@@ -52,23 +52,31 @@ _AI_KEYWORDS = {
     "wandb", "weights and biases", "dvc",
     "onnx", "triton", "tensorrt", "vllm",
     # Abbreviations commonly found in JDs
-    "ai", "ai/ml", "ml/ai", "cv/nlp", "nlp/cv", "dl",
+    "ai", "ai/ml", "ml/ai", "cv/nlp", "nlp/cv", "dl", "ki",
 }
 
-# One regex matching any keyword as a whole word (letter/digit boundaries,
-# so keywords containing punctuation like "ai/ml" still work)
-_AI_PATTERN = re.compile(
-    r"(?<![a-z0-9])(?:"
-    + "|".join(re.escape(kw) for kw in sorted(_AI_KEYWORDS, key=len, reverse=True))
-    + r")(?![a-z0-9])",
-    re.IGNORECASE,
-)
+# Too generic to signal an AI/ML role when they only appear in the description
+# (most postings now mention "AI" in passing); they still count in the title.
+_TITLE_ONLY_KEYWORDS = {"ai", "dl", "ki", "pandas", "numpy", "scipy", "matplotlib", "airflow", "databricks"}
+
+
+def _keyword_pattern(keywords: set[str]) -> re.Pattern:
+    """Regex matching any keyword as a whole word (letter/digit boundaries, so "ai/ml" still works)."""
+    return re.compile(
+        r"(?<![a-z0-9])(?:"
+        + "|".join(re.escape(kw) for kw in sorted(keywords, key=len, reverse=True))
+        + r")(?![a-z0-9])",
+        re.IGNORECASE,
+    )
+
+
+_AI_PATTERN = _keyword_pattern(_AI_KEYWORDS)
+_AI_DESCRIPTION_PATTERN = _keyword_pattern(_AI_KEYWORDS - _TITLE_ONLY_KEYWORDS)
 
 
 def has_ai_keywords(title: str, description: str) -> bool:
-    """Return True if the job title or description contains at least one AI-related keyword."""
-    text = f"{title} {description}"
-    return bool(_AI_PATTERN.search(text))
+    """True if the title has any AI keyword or the description has a specific (non-generic) one."""
+    return bool(_AI_PATTERN.search(title or "") or _AI_DESCRIPTION_PATTERN.search(description or ""))
 
 
 class Scorer:
