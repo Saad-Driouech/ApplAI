@@ -4,8 +4,9 @@ Job scoring orchestrator.
 Reads 'new' jobs from the database, sends each through the Gemini client,
 stores the score, and marks jobs as 'queued' (above threshold) or 'skipped'.
 
-A keyword pre-filter runs first: jobs with no AI/ML keyword in the title and no
-specific AI/ML term in the description are auto-skipped without an LLM call (saves quota).
+Pre-filters run first and auto-skip without an LLM call (saves quota): jobs outside
+the target countries, working-student and above-senior titles, and jobs with no AI/ML
+keyword in the title and no specific AI/ML term in the description.
 """
 from __future__ import annotations
 
@@ -79,6 +80,21 @@ def has_ai_keywords(title: str, description: str) -> bool:
     return bool(_AI_PATTERN.search(title or "") or _AI_DESCRIPTION_PATTERN.search(description or ""))
 
 
+# Titles the candidate never wants: working-student jobs and roles above senior.
+# German "-leiter"/"-leitung" (Teamleiter, Projektleitung) count as lead roles.
+_EXCLUDED_TITLE_PATTERN = re.compile(
+    r"(?<![a-z0-9])(?:werkstudent\w*|working[\s-]student|studentische[rn]?\s+hilfskraft|hiwi"
+    r"|lead|staff|principal|head\s+of|director|vp|vice\s+president)(?![a-z0-9])"
+    r"|(?:leiter(?:in)?|leitung)(?![a-z0-9])",
+    re.IGNORECASE,
+)
+
+
+def is_excluded_title(title: str) -> bool:
+    """True for working-student and above-senior titles, which are skipped without an LLM call."""
+    return bool(_EXCLUDED_TITLE_PATTERN.search(title or ""))
+
+
 class Scorer:
     """
     Orchestrates the scoring pipeline:
@@ -144,6 +160,20 @@ class Scorer:
                         reasoning=f"Auto-skipped: location outside target countries ({job.get('city') or job.get('country')})",
                         new_status="skipped",
                         skip_reason="location",
+                    )
+                stats["filtered"] += 1
+                continue
+
+            # ── Title pre-filter: working-student and above-senior roles ──
+            if is_excluded_title(job.get("title", "")):
+                with db.get_conn(self._db_path) as conn:
+                    db.update_score(
+                        conn,
+                        job_id=job_id,
+                        score=0.0,
+                        reasoning="Auto-skipped: working-student or above-senior title",
+                        new_status="skipped",
+                        skip_reason="title_filter",
                     )
                 stats["filtered"] += 1
                 continue

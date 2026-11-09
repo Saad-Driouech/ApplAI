@@ -71,8 +71,8 @@ generic software engineering) are not AI/ML roles: score them 0-3, however stron
 even if not every listed requirement is met. Transferable ML skills matter.
 - Weigh core technical skills (Python, ML frameworks, model development) more than \
 nice-to-haves (specific cloud certifications, niche domain knowledge).
-- Years-of-experience requirements are soft guidelines, not hard cutoffs. \
-Strong demonstrated skills can compensate for fewer years.
+- Apply the seniority, years-of-experience, employment-type and language preferences stated in \
+the candidate profile; they take precedence over the 5.0 minimum above.
 - Location eligibility is a hard blocker: if the posting restricts where the candidate must \
 live or be authorized to work (e.g. "Remote - USA/Canada", "must be US-based", "UK residents only") \
 and the candidate's profile does not meet it, score 0-2 and say so in the reasoning. Remote roles \

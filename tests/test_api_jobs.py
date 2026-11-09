@@ -87,8 +87,13 @@ class TestScore:
         body = resp.json()
         assert body["score"] == 7.5 and body["threshold"] == 6.0
         assert body["passes_keyword_filter"] is True
+        assert body["passes_title_filter"] is True
         assert body["job"]["country"] == "DE"
         assert [d["id"] for d in body["duplicates"]] == ["j1"]
+
+    def test_reports_title_filter(self, client):
+        resp = client.post("/jobs/score", json={**NEW_JOB, "title": "Werkstudent AI Engineering"}, headers=KEY)
+        assert resp.json()["passes_title_filter"] is False
 
     def test_does_not_store_the_job(self, client, cfg):
         client.post("/jobs/score", json=NEW_JOB, headers=KEY)

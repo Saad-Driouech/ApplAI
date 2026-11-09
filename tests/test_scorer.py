@@ -4,7 +4,7 @@ import pytest
 import src.database as db
 from src.matching.gemini_client import BudgetExceeded
 from src.matching.response_parser import ScoreParseError, parse_score_response
-from src.matching.scorer import Scorer, has_ai_keywords
+from src.matching.scorer import Scorer, has_ai_keywords, is_excluded_title
 
 
 class _FakeClient:
@@ -78,6 +78,20 @@ class TestScoringOutcomes:
         with db.get_conn(db_with_job) as conn:
             row = conn.execute("SELECT status, skip_reason FROM jobs WHERE id = 'j1'").fetchone()
         assert tuple(row) == ("skipped", "location")
+
+    def test_excluded_title_skipped_without_llm_call(self, db_with_job):
+        with db.get_conn(db_with_job) as conn:
+            conn.execute("UPDATE jobs SET title = 'Werkstudent Machine Learning (m/w/d)' WHERE id = 'j1'")
+
+        class _MustNotBeCalled:
+            def score_job(self, *args, **kwargs):
+                raise AssertionError("LLM called for an excluded title")
+
+        stats = Scorer(db_with_job, _MustNotBeCalled(), cv_summary="").run()
+        assert stats["filtered"] == 1
+        with db.get_conn(db_with_job) as conn:
+            row = conn.execute("SELECT status, skip_reason FROM jobs WHERE id = 'j1'").fetchone()
+        assert tuple(row) == ("skipped", "title_filter")
 
     def test_non_job_skipped_even_with_high_score(self, db_with_job):
         reply = '{"score": 8, "reasoning": "AI product launch", "is_job_posting": false}'
@@ -230,6 +244,27 @@ class TestHasAiKeywords:
         ) is False
 
 
+class TestIsExcludedTitle:
+    @pytest.mark.parametrize("title", [
+        "Werkstudent KI-Entwicklung (m/w/d)", "Werkstudentin Data Science", "Working Student - AI",
+        "Studentische Hilfskraft Machine Learning", "HiWi Computer Vision",
+        "Lead Data Scientist", "KI & Automation Lead", "Tech Lead ML Platform", "Staff ML Engineer",
+        "Senior Staff Software Engineer, Agentic Platform", "Principal AI Engineer", "Head of AI",
+        "Director of Machine Learning", "VP Engineering", "Vice President, Data Science",
+        "Teamleiter KI (m/w/d)", "Projektleitung Data Analytics",
+    ])
+    def test_excluded(self, title):
+        assert is_excluded_title(title) is True
+
+    @pytest.mark.parametrize("title", [
+        "Machine Learning Engineer", "Senior AI Engineer", "Junior Data Scientist",
+        "AI Engineering Intern", "Leading AI startup hiring ML Engineer", "Staffing Data Analyst",
+        "Student Success Manager", "",
+    ])
+    def test_kept(self, title):
+        assert is_excluded_title(title) is False
+
+
 class TestScorePrompt:
     def test_remote_without_requirement_is_not_presented_as_a_country(self):
         from src.matching.gemini_client import build_score_prompt
@@ -252,3 +287,9 @@ class TestScorePrompt:
         prompt = build_score_prompt({}, "cv")
         assert "are not AI/ML roles: score them 0-3" in prompt
         assert "not how strong the candidate is in general" in prompt
+
+    def test_profile_preferences_override_experience_leniency(self):
+        from src.matching.gemini_client import build_score_prompt
+        prompt = build_score_prompt({}, "cv")
+        assert "soft guidelines" not in prompt
+        assert "preferences stated in the candidate profile" in prompt

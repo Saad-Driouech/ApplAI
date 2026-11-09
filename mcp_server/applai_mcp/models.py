@@ -71,6 +71,9 @@ class ScoreResult(_ApiModel):
     gaps: list[str]
     is_job_posting: bool
     passes_keyword_filter: bool = Field(description="Whether the pipeline's AI-keyword pre-filter would keep it")
+    passes_title_filter: bool = Field(
+        default=True,
+        description="Whether the pipeline's title pre-filter (working-student and above-senior roles) would keep it")
     job: ResolvedJob
     duplicates: list[JobSummary] = Field(description="Pipeline jobs with the same normalized company+title")
     sanitizer_flags: list[str] = Field(description="Content removed by the prompt-injection filter before scoring")

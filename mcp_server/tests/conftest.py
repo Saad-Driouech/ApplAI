@@ -29,7 +29,7 @@ def job(**overrides: Any) -> dict:
 
 def score_response(**overrides: Any) -> dict:
     base = {"score": 7.5, "threshold": 6.0, "reasoning": "Strong LLM match", "must_haves_met": ["Python"],
-            "gaps": ["Go"], "is_job_posting": True, "passes_keyword_filter": True,
+            "gaps": ["Go"], "is_job_posting": True, "passes_keyword_filter": True, "passes_title_filter": True,
             "job": {"title": "AI Engineer", "company": "Acme", "country": "DE", "city": "",
                     "source_url": "", "description_chars": len(JD)},
             "duplicates": [], "sanitizer_flags": []}

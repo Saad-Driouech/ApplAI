@@ -51,7 +51,7 @@ from src.api_models import (
     ResolvedJob,
     ScoreResponse,
 )
-from src.matching.scorer import has_ai_keywords
+from src.matching.scorer import has_ai_keywords, is_excluded_title
 from src.pipeline import (
     build_generators,
     generate_one,
@@ -233,6 +233,7 @@ def score_job(req: JobInput):
         gaps=result.gaps,
         is_job_posting=result.is_job_posting,
         passes_keyword_filter=has_ai_keywords(job["title"], job["description"]),
+        passes_title_filter=not is_excluded_title(job["title"]),
         job=ResolvedJob(
             title=job["title"], company=job["company"], country=job["country"], city=job["city"],
             source_url=job["source_url"], description_chars=len(job["description"]),

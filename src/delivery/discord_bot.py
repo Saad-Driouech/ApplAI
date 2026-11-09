@@ -203,6 +203,7 @@ class DiscordDelivery:
             reason = job.get("skip_reason", "low_score") or "low_score"
             tag = {
                 "keyword_filter": "filtered", "location": "location", "not_a_job": "not a job",
+                "title_filter": "title",
             }.get(reason, f"score {score:.1f}")
             url = job.get("source_url", "")
             value = f"{job.get('company', '?')} | {tag}"
