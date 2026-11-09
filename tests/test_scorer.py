@@ -252,6 +252,7 @@ class TestIsExcludedTitle:
         "Senior Staff Software Engineer, Agentic Platform", "Principal AI Engineer", "Head of AI",
         "Director of Machine Learning", "VP Engineering", "Vice President, Data Science",
         "Teamleiter KI (m/w/d)", "Projektleitung Data Analytics",
+        "AI Internship/ KI Werksstudent (w/m/d)", "Chief AI Officer", "Chief Information Security Officer",
     ])
     def test_excluded(self, title):
         assert is_excluded_title(title) is True
@@ -277,6 +278,18 @@ class TestScorePrompt:
         assert "Location: Remote · Worldwide" in build_score_prompt(
             {"country": "REMOTE", "city": "Remote · Worldwide"}, "cv")
         assert "Location: Berlin, DE" in build_score_prompt({"country": "DE", "city": "Berlin"}, "cv")
+
+    def test_guessed_country_not_asserted(self):
+        from src.matching.gemini_client import build_score_prompt
+        # Unknown towns default to DE; the prompt shows only what the listing says
+        assert "Location: Darmstadt\n" in build_score_prompt({"country": "DE", "city": "Darmstadt"}, "cv")
+        assert "Location: DE\n" in build_score_prompt({"country": "DE", "city": ""}, "cv")
+
+    def test_prompt_treats_profile_constraints_as_blockers(self):
+        from src.matching.gemini_client import build_score_prompt
+        prompt = build_score_prompt({}, "cv")
+        assert "Profile constraints are hard blockers" in prompt
+        assert "on-site or hybrid roles in a country where the profile gives no work authorization" in prompt
 
     def test_prompt_states_location_eligibility_rule(self):
         from src.matching.gemini_client import build_score_prompt

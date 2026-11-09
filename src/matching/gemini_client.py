@@ -28,6 +28,7 @@ import src.database as db
 from src.logger import audit, get_logger
 # Re-exported: other clients and the scorer import these from here
 from src.matching.response_parser import ScoreParseError, ScoreResult, parse_score_response
+from src.scrapers.location import names_country
 
 log = get_logger(__name__)
 
@@ -73,9 +74,13 @@ even if not every listed requirement is met. Transferable ML skills matter.
 nice-to-haves (specific cloud certifications, niche domain knowledge).
 - Apply the seniority, years-of-experience, employment-type and language preferences stated in \
 the candidate profile; they take precedence over the 5.0 minimum above.
+- Profile constraints are hard blockers: if the posting requires something the profile rules out \
+or marks as not wanted (e.g. a language level above the candidate's, an employment type the candidate \
+does not accept), score 0-3 and name the blocker in the reasoning, however good the technical fit.
 - Location eligibility is a hard blocker: if the posting restricts where the candidate must \
 live or be authorized to work (e.g. "Remote - USA/Canada", "must be US-based", "UK residents only") \
-and the candidate's profile does not meet it, score 0-2 and say so in the reasoning. Remote roles \
+and the candidate's profile does not meet it, score 0-2 and say so in the reasoning. This includes \
+on-site or hybrid roles in a country where the profile gives no work authorization. Remote roles \
 open worldwide or in Europe/EMEA are eligible.
 - "Preferred" or "nice to have" requirements should NOT lower the score significantly.
 - Return raw JSON, no markdown fences.
@@ -83,11 +88,13 @@ open worldwide or in Europe/EMEA are eligible.
 
 
 def _location_text(job: dict) -> str:
-    """Location as stated by the source; never an assumed country for remote roles."""
+    """Location as stated by the source; a country is added only when the text itself names it."""
     city = (job.get("city") or "").strip()
     country = job.get("country") or ""
     if country == "REMOTE":
         return city if city.lower() != "remote" else "Remote (no location requirement stated in the listing)"
+    if city and not names_country(city, country):
+        return city   # the country was guessed (e.g. unknown towns default to DE); let the model judge
     return ", ".join(part for part in (city, country) if part)
 
 

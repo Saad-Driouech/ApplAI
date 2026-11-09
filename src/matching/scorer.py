@@ -83,8 +83,8 @@ def has_ai_keywords(title: str, description: str) -> bool:
 # Titles the candidate never wants: working-student jobs and roles above senior.
 # German "-leiter"/"-leitung" (Teamleiter, Projektleitung) count as lead roles.
 _EXCLUDED_TITLE_PATTERN = re.compile(
-    r"(?<![a-z0-9])(?:werkstudent\w*|working[\s-]student|studentische[rn]?\s+hilfskraft|hiwi"
-    r"|lead|staff|principal|head\s+of|director|vp|vice\s+president)(?![a-z0-9])"
+    r"(?<![a-z0-9])(?:werks?student\w*|working[\s-]student|studentische[rn]?\s+hilfskraft|hiwi"
+    r"|lead|staff|principal|head\s+of|director|chief|vp|vice\s+president)(?![a-z0-9])"
     r"|(?:leiter(?:in)?|leitung)(?![a-z0-9])",
     re.IGNORECASE,
 )

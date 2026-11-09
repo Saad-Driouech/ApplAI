@@ -198,9 +198,27 @@ class TestInferOnsiteCountry:
         ("Zürich", "CH"), ("Amsterdam", "NL"),
         ("London", "XX"), ("GB - Dundee", "XX"), ("Remote (UK hours)", "XX"),
         ("Bicester United Kingdom", "XX"), ("Sydney, Australia", "XX"), ("Vilnius", "XX"), ("Wien", "XX"),
+        ("Darmstadt", "DE"), ("Baden-Württemberg", "DE"), ("Bern", "CH"), ("Zug", "CH"),
+        ("Almelo, Overijssel, Nederland", "NL"), ("'s-Hertogenbosch, Noord-Brabant, Nederland", "NL"),
+        ("Toulouse, Occitanie", "XX"), ("Lyon", "XX"), ("Cambridge", "XX"), ("La Rochelle", "XX"),
+        ("Lyon 🇫🇷", "XX"), ("Hamburg 🇩🇪", "DE"), ("Utrecht 🇳🇱", "NL"),
     ])
     def test_locations(self, location, expected):
         assert infer_onsite_country(location) == expected
+
+
+def test_remote_flag_location():
+    assert infer_remote_country("Remote 🇳🇱") == "NL"
+    assert infer_remote_country("Remote 🇺🇸") == "XX"
+
+
+@pytest.mark.parametrize("location,code,expected", [
+    ("Berlin", "DE", True), ("Darmstadt", "DE", False), ("Lyon 🇫🇷", "DE", False),
+    ("Bern", "CH", True), ("Rotterdam, Zuid-Holland, Nederland", "NL", True), ("Gilching 🇩🇪", "DE", True),
+])
+def test_names_country(location, code, expected):
+    from src.scrapers.location import names_country
+    assert names_country(location, code) is expected
 
 
 def test_arbeitnow_posted_at_is_iso():
