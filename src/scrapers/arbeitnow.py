@@ -4,12 +4,14 @@ Arbeitnow scraper — free, no auth, Germany-focused tech jobs.
 API docs: https://www.arbeitnow.com/api
 Returns JSON directly, no auth needed, no rate limit documented.
 Covers: DE (primarily), some remote roles.
+
+The API has no search: it returns the newest jobs of every kind, 300 per page
+(about two days), so relevance is left to the scorer's keyword pre-filter.
 """
 from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import urlencode
 
 from src.logger import get_logger
 from src.scrapers.base import BaseScraper, ScraperError
@@ -33,36 +35,37 @@ class ArbeitnowScraper(BaseScraper):
     base_url = "https://www.arbeitnow.com"
     request_delay = 1.0
 
-    def __init__(self, db_path, **kwargs):
+    def __init__(self, db_path, max_pages: int = 3, **kwargs):
         super().__init__(db_path, **kwargs)
+        self._max_pages = max_pages
 
     def _fetch_jobs(self, query: str, location: str, **kwargs: Any) -> list[dict[str, Any]]:
-        # Arbeitnow API accepts search and location as query params
-        params = urlencode({
-            "search": query,
-            "location": location,
-        })
-        url = f"{_API_URL}?{params}"
-
-        try:
-            resp = self._get(url, headers={"Accept": "application/json"})
-        except Exception as exc:
-            raise ScraperError(f"Arbeitnow request failed: {exc}") from exc
-
-        try:
-            data = resp.json()
-        except Exception as exc:
-            raise ScraperError(f"Arbeitnow JSON parse failed: {exc}") from exc
-
-        jobs = data.get("data", [])
-        results = []
-        for item in jobs:
+        # `query` and `location` are ignored: the API returns every job regardless
+        results: dict[str, dict[str, Any]] = {}
+        for page in range(1, self._max_pages + 1):
             try:
-                results.append(self._map_item(item))
+                resp = self._get(_API_URL, params={"page": page}, headers={"Accept": "application/json"})
             except Exception as exc:
-                log.debug("[arbeitnow] Skipped item: %s", exc)
+                raise ScraperError(f"Arbeitnow request failed: {exc}") from exc
 
-        return results
+            try:
+                data = resp.json()
+            except Exception as exc:
+                raise ScraperError(f"Arbeitnow JSON parse failed: {exc}") from exc
+
+            for item in data.get("data", []):
+                try:
+                    job = self._map_item(item)
+                except Exception as exc:
+                    log.debug("[arbeitnow] Skipped item: %s", exc)
+                    continue
+                # Pages overlap, so the same job can appear twice
+                results.setdefault(job["external_id"], job)
+
+            if not (data.get("links") or {}).get("next"):
+                break
+
+        return list(results.values())
 
     def _map_item(self, item: dict) -> dict[str, Any]:
         slug = item.get("slug", "")

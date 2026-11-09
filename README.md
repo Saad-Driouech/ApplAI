@@ -172,7 +172,7 @@ applai/
 │   ├── logger.py               # Structured logging + audit trail
 │   ├── scrapers/
 │   │   ├── base.py             # Abstract base with retry + dedup
-│   │   ├── arbeitnow.py        # Germany tech jobs
+│   │   ├── arbeitnow.py        # Germany jobs (general feed, no search API)
 │   │   ├── englishjobs.py      # English-speaking jobs in Germany (HTML listing)
 │   │   ├── remotive.py         # Global remote jobs (free API)
 │   │   ├── remoteok.py         # Global remote jobs (free public API)

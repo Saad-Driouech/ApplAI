@@ -211,6 +211,28 @@ def test_arbeitnow_posted_at_is_iso():
     assert _iso_from_epoch(None) == ""
 
 
+def test_arbeitnow_paginates_and_dedupes(monkeypatch):
+    scraper = ArbeitnowScraper.__new__(ArbeitnowScraper)
+    scraper._max_pages = 3
+    item = lambda slug: {"slug": slug, "title": "ML Engineer", "company_name": "Acme", "location": "Berlin"}
+    pages = {
+        1: {"data": [item("a"), item("b")], "links": {"next": "page=2"}},
+        2: {"data": [item("b"), item("c")], "links": {"next": None}},
+    }
+    calls = []
+
+    def fake_get(url, params=None, headers=None):
+        calls.append(params)
+        return SimpleNamespace(json=lambda: pages[params["page"]])
+
+    monkeypatch.setattr(scraper, "_get", fake_get)
+    jobs = scraper._fetch_jobs("ignored query", "Germany")
+
+    assert [j["external_id"] for j in jobs] == ["a", "b", "c"]
+    # Stops when there is no next page, and never sends the ignored search params
+    assert calls == [{"page": 1}, {"page": 2}]
+
+
 # ── EnglishJobs ───────────────────────────────────────────────────────────
 
 def _englishjobs_card(job_id="ee61dff84d9c9495", company="AstraZeneca", facts=("München", "October 23")):

@@ -89,7 +89,7 @@ def phase_scrape(cfg) -> int:
     scrapers = _build_scrapers(cfg, cfg.paths.db_path)
     total_new = 0
 
-    # Only Arbeitnow and EnglishJobs use the query; the other sources filter by category or their own query
+    # Only EnglishJobs uses the query; the other sources filter by category or return everything
     for scraper in scrapers:
         new_jobs = scraper.run(query=_SCRAPE_QUERY, location="Germany")
         total_new += len(new_jobs)
