@@ -1,10 +1,10 @@
 """
 LaTeX safety: validation, escaping, and sandboxed compilation.
 
-Two independent layers: validate_tex_file() rejects file-I/O and code-execution
-primitives; compile_tex() runs pdflatex confined to its folder (paranoid
-kpathsea access) with no secrets in its environment. Always compile through
-compile_tex().
+Two independent layers: validate_tex_file() rejects file-I/O, file-embedding and
+code-execution primitives; compile_tex() runs pdflatex confined to its folder
+(paranoid kpathsea access) with no secrets in its environment. Always compile
+through compile_tex().
 """
 import os
 import re
@@ -29,11 +29,13 @@ DANGEROUS_PATTERNS = [
         "file I/O primitive",
     ),
     (r"\\pdf(filedump|filesize|filemoddate|mdfivesum)" + _CMD_END, "file inspection primitive"),
+    # These read any file by absolute path into the PDF; openin_any does not restrict them
+    (r"\\(pdfobj|pdfximage|XeTeXpdffile|XeTeXpicfile)" + _CMD_END, "file embedding primitive"),
+    (r"\\special" + _CMD_END, "driver special (can embed files or run commands)"),
     (r"\\(directlua|luaexec)" + _CMD_END, "Lua code execution"),
     (r"\\catcode" + _CMD_END, "category code manipulation"),
     (r"\\csname" + _CMD_END, "dynamic command construction"),
     (r"\^\^", "TeX character-code escape (can hide commands)"),
-    (r"\\special\s*\{[^}]*\|", "pipe in special command"),
     (r"\\url\{[^}]*\|", "pipe in url command"),
 ]
 

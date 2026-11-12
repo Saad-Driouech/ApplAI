@@ -77,6 +77,13 @@ def test_relative_input_blocked():
     "\\csname in\nput\\endcsname{x}",
     r"^^5cinput{x}",
     r"\directlua{os.execute('id')}",
+    # Embed any readable file into the PDF; openin_any does not stop these
+    r"\pdfobj file {/proc/1/environ}\pdfrefobj\pdflastobj",
+    r"\immediate\pdfximage{/data/db/applai.db}",
+    r"\special{pdf:fstream @f (/proc/1/environ)}",
+    r"\special {pdf:image (/etc/passwd)}",
+    r"\XeTeXpdffile /mnt/job_applications/transcripts/t.pdf",
+    r"\XeTeXpicfile /etc/passwd",
 ])
 def test_bypass_payloads_blocked(payload):
     assert not validate_tex_file(_write_tex(payload))["safe"]

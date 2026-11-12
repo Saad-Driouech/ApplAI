@@ -24,7 +24,7 @@ log = get_logger(__name__)
 CV_RULES = """\
 ## Rules
 - Keep the LaTeX structure intact; only modify text content.
-- Do NOT add \\write18, \\input, \\include, \\openin, \\openout, or any file I/O commands.
+- Do NOT add \\write18, \\input, \\include, \\openin, \\openout, \\special, \\pdfobj, or any file I/O commands.
 - The CV MUST fit on exactly ONE page. This is a hard constraint.
 - Keep ALL sections. Do not remove any section. Instead make each bullet point shorter and more concise.
 - Each bullet point should be one line maximum. Cut filler words, keep only the metric or outcome.
