@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import secrets
 import time
 from collections.abc import Awaitable, Callable
@@ -22,6 +23,8 @@ from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import BaseModel, Field
 
 from applai_mcp.models import Gated, Preview
+
+log = logging.getLogger(__name__)
 
 
 class Approval(BaseModel):
@@ -98,6 +101,11 @@ def client_can_elicit(ctx: Context) -> bool:
     return caps is not None and caps.elicitation is not None
 
 
+def _client_name(ctx: Context) -> str:
+    params = ctx.session.client_params
+    return f"{params.client_info.name} {params.client_info.version}" if params else "unknown"
+
+
 async def request_approval(
     ctx: Context,
     tokens: ConfirmationTokens,
@@ -106,9 +114,14 @@ async def request_approval(
     args: dict[str, Any],
     token: str | None,
     build_preview: Callable[[], Awaitable[Preview]],
+    allow_elicitation: bool = True,
 ) -> Elicit[Approval] | Approval | PendingConfirmation:
-    """Resolver body shared by gated tools; see the module docstring."""
-    if client_can_elicit(ctx):
+    """Resolver body shared by gated tools; see the module docstring. allow_elicitation=False forces tokens."""
+    can_elicit = client_can_elicit(ctx)
+    use_elicitation = allow_elicitation and can_elicit
+    log.info("Confirmation for %s via %s (client %s, elicitation advertised: %s)",
+             tool, "elicitation" if use_elicitation else "token", _client_name(ctx), can_elicit)
+    if use_elicitation:
         # Tokens are never issued to elicitation-capable clients, so one passed here is ignored
         preview = await previews.get(tool, args, build_preview)
         return Elicit(preview.as_message() + "\n\nApprove?", Approval)

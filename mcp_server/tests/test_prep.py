@@ -81,9 +81,23 @@ class TestPrompts:
     async def test_listed_with_arguments(self, make_client):
         async with make_client() as client:
             prompts = {p.name: p for p in (await client.list_prompts()).prompts}
-        assert set(prompts) == {"interview_prep", "application_status"}
+        assert set(prompts) == {"apply_to_job", "daily_run", "interview_prep", "application_status"}
         args = {a.name: a.required for a in prompts["interview_prep"].arguments}
         assert args == {"company": True, "role": False, "when": False}
+
+    @pytest.mark.parametrize("posting,source", [("https://jobs.example.com/1", "url"), ("We are hiring...", "jd_text")])
+    async def test_apply_to_job_asks_before_writing(self, make_client, posting, source):
+        async with make_client() as client:
+            result = await client.get_prompt("apply_to_job", {"posting": posting})
+        text = result.messages[0].content.text
+        assert f"get_scoring_context with {source} set to the posting" in text
+        assert "stop until I answer" in text and "Never invent experience" in text
+
+    async def test_daily_run_caps(self, make_client):
+        async with make_client() as client:
+            result = await client.get_prompt("daily_run", {"max_documents": "3"})
+        text = result.messages[0].content.text
+        assert "list_jobs_to_score with limit 30" in text and "For at most 3 jobs" in text
 
     async def test_interview_prep_composes_tools_and_connectors(self, make_client):
         async with make_client() as client:
