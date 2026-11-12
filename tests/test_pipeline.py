@@ -15,7 +15,7 @@ def test_generation_gives_up_after_max_attempts(tmp_path, monkeypatch):
     monkeypatch.setenv("APPLAI_CL_TEMPLATE", str(tmp_path / "cl.tex"))
     cfg = SimpleNamespace(
         paths=SimpleNamespace(db_path=tmp_path / "t.db", working_dir=tmp_path),
-        job_max_age_days=30, generate_batch_size=10,
+        job_max_age_days=30, generate_batch_size=10, documents_llm_enabled=True,
     )
     db.init_db(cfg.paths.db_path)
     with db.get_conn(cfg.paths.db_path) as conn:
@@ -43,6 +43,30 @@ def test_run_all_scores_even_when_scrape_finds_nothing(monkeypatch):
 
     pipeline.run_all(cfg=None)
     assert calls == ["scrape", "score", "generate", "deliver"]
+
+
+def test_llm_phases_refuse_to_run_without_keys(tmp_path):
+    cfg = SimpleNamespace(paths=SimpleNamespace(db_path=tmp_path / "t.db", working_dir=tmp_path),
+                          scoring_llm_enabled=False, documents_llm_enabled=False,
+                          tier1_provider="gemini", document_provider="anthropic")
+    with pytest.raises(pipeline.LLMDisabled, match="gemini"):
+        pipeline.phase_score(cfg)
+    with pytest.raises(pipeline.LLMDisabled, match="anthropic"):
+        pipeline.phase_generate(cfg)
+
+
+def test_run_all_skips_disabled_llm_phases(monkeypatch):
+    calls = []
+    monkeypatch.setattr(pipeline, "phase_scrape", lambda cfg: calls.append("scrape"))
+    monkeypatch.setattr(pipeline, "phase_deliver", lambda cfg: calls.append("deliver"))
+
+    def disabled(cfg):
+        raise pipeline.LLMDisabled("no key")
+
+    monkeypatch.setattr(pipeline, "phase_score", disabled)
+    monkeypatch.setattr(pipeline, "phase_generate", disabled)
+    pipeline.run_all(cfg=None)
+    assert calls == ["scrape", "deliver"]
 
 
 def _deliver_cfg(tmp_path):
@@ -93,6 +117,26 @@ class TestDeliver:
             for _ in range(db.MAX_ATTEMPTS):
                 pipeline.phase_deliver(cfg)
         assert tuple(_job(cfg)) == ("failed", db.MAX_ATTEMPTS, None)
+
+    def test_deliver_only_selected_applications(self, tmp_path):
+        cfg = _deliver_cfg(tmp_path)
+        with db.get_conn(cfg.paths.db_path) as conn:
+            db.upsert_job(conn, {
+                "id": "j2", "external_id": "e2", "source": "test", "title": "Data Scientist",
+                "company": "Other", "country": "DE", "source_url": "https://y",
+            })
+            db.update_status(conn, "j2", "ready")
+            db.create_application(conn, {"id": "a2", "job_id": "j2", "cv_path": str(tmp_path / "cv.pdf"),
+                                         "cover_letter_path": str(tmp_path / "cl.pdf")})
+        with mock.patch("src.delivery.discord_bot.DiscordDelivery") as discord, \
+             mock.patch("src.delivery.notion_tracker.NotionTracker"):
+            discord.return_value.send_bundle.return_value = "m2"
+            assert pipeline.phase_deliver(cfg, app_ids=["a2"]) == 1
+        [call] = discord.return_value.send_bundle.call_args_list
+        assert call.kwargs["app_id"] == "a2"
+        with db.get_conn(cfg.paths.db_path) as conn:
+            statuses = dict(conn.execute("SELECT id, status FROM jobs").fetchall())
+        assert statuses == {"j1": "ready", "j2": "delivered"}
 
     def test_missing_documents_counted_not_sent(self, tmp_path):
         cfg = _deliver_cfg(tmp_path)

@@ -35,6 +35,10 @@ from src.utils.locks import phase_lock
 log = get_logger(__name__)
 
 
+class LLMDisabled(RuntimeError):
+    """The phase needs an LLM key that is not configured; Claude does this work through the MCP server."""
+
+
 def _exclusive(phase: str):
     """Run the phase under its lock; raises PhaseBusy if another run holds it."""
     def decorator(fn):
@@ -166,6 +170,9 @@ def build_tier1_clients(cfg) -> tuple:
 def phase_score(cfg) -> dict:
     """Expire stale jobs, then score 'new' jobs with the Tier-1 LLM."""
     from src.matching.scorer import Scorer
+
+    if not cfg.scoring_llm_enabled:
+        raise LLMDisabled(f"LLM scoring is disabled: no API key for provider '{cfg.tier1_provider}'")
 
     expired = expire_stale(cfg)
     cv_summary = load_cv_summary(cfg)
@@ -336,6 +343,8 @@ def generate_one(cfg, job: dict, cv_gen, cl_gen) -> str | None:
 @_exclusive("generate")
 def phase_generate(cfg) -> int:
     """Generate CV + cover letter for all 'queued' jobs."""
+    if not cfg.documents_llm_enabled:
+        raise LLMDisabled(f"LLM document generation is disabled: no API key for '{cfg.document_provider}'")
     cleanup_stale_bundles(cfg)
     expire_stale(cfg)
 
@@ -364,8 +373,8 @@ def phase_generate(cfg) -> int:
 
 
 @_exclusive("deliver")
-def phase_deliver(cfg) -> int:
-    """Send ready bundles to Discord and log to Notion."""
+def phase_deliver(cfg, app_ids: list[str] | None = None) -> int:
+    """Send ready bundles (up to 10, or only *app_ids*) to Discord and log them to Notion."""
     from src.delivery.discord_bot import DiscordDelivery
     from src.delivery.notion_tracker import NotionTracker
 
@@ -379,15 +388,17 @@ def phase_deliver(cfg) -> int:
     )
 
     delivered = 0
+    # Only "?" placeholders are interpolated; the ids are bound as parameters
+    only = f"AND a.id IN ({','.join('?' * len(app_ids))})" if app_ids else ""
     with db.get_conn(cfg.paths.db_path) as conn:
-        rows = conn.execute("""
+        rows = conn.execute(f"""
             SELECT a.*, j.title, j.company, j.country, j.city, j.score, j.score_reasoning,
                    j.source_url, j.id as job_id
             FROM applications a
             JOIN jobs j ON a.job_id = j.id
-            WHERE j.status = 'ready' AND a.user_decision IS NULL AND a.discord_msg_id IS NULL
+            WHERE j.status = 'ready' AND a.user_decision IS NULL AND a.discord_msg_id IS NULL {only}
             LIMIT 10
-        """).fetchall()
+        """, app_ids or ()).fetchall()  # nosec B608
 
     try:
         for row in rows:
@@ -446,8 +457,12 @@ def phase_deliver(cfg) -> int:
 def run_all(cfg) -> None:
     log.info("=== ApplAI pipeline starting ===")
     phase_scrape(cfg)
-    phase_score(cfg)   # always: the backlog may hold jobs from earlier runs
-    phase_generate(cfg)
+    # Always score and generate when enabled: the backlog may hold jobs from earlier runs
+    for phase in (phase_score, phase_generate):
+        try:
+            phase(cfg)
+        except LLMDisabled as exc:
+            log.info("Skipping phase: %s", exc)
     phase_deliver(cfg)
     log.info("=== ApplAI pipeline complete ===")
 

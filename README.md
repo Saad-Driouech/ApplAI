@@ -105,6 +105,7 @@ All configuration is via environment variables in `config/.env`. See [`config/.e
 | Variable | Purpose | Default |
 |----------|---------|---------|
 | `APPLAI_API_KEY` | Required `X-API-Key` for all API routes except `/health` and the Discord webhook | — |
+| `GOOGLE_AI_API_KEY`, `ANTHROPIC_API_KEY` | Keys for ApplAI's own scoring and document LLMs. Optional: without them, `/score`, `/generate`, `/jobs/score` and `/jobs/generate` return `503` and Claude does that work through the MCP server | — |
 | `LLM_TIER1_PROVIDER` | Scoring LLM (`gemini`, `groq` or `ollama`) | `gemini` |
 | `DOCUMENT_LLM_PROVIDER` | Document generation LLM (`anthropic` or `groq`) | `anthropic` |
 | `SCORE_THRESHOLD` | Minimum score to queue a job (0-10) | `6.0` |
@@ -141,18 +142,32 @@ All configuration is via environment variables in `config/.env`. See [`config/.e
 | `POST` | `/jobs/generate` | Generate a bundle for one job (`job_id` or a new job) into `.pending/`; delivery and approval follow the normal flow |
 | `GET` | `/jobs` | Jobs filtered by `status`, `country`, `company`, `since`, `min_score` |
 | `GET` | `/jobs/duplicates` | Jobs matching a `company` + `title` after dedup normalization |
-| `GET` | `/jobs/{job_id}` | One job with its description and latest application |
+| `GET` | `/jobs/{job_id}` | One job with its description and latest application (`?clean=true` applies the prompt-injection filter) |
 
-All routes except `/health` and `/discord/interactions` require the `X-API-Key` header. A phase that is already running returns `409`. The `/jobs/*` routes back the MCP server and use typed request/response models (see `/docs`).
+Claude-authored flow (Claude scores and writes through the MCP server; ApplAI stores, renders and delivers):
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/jobs/resolve` | Fetch or take a posting, sanitize it, report the pre-filters and duplicates (no LLM) |
+| `GET` | `/scoring/context` | Scoring rubric, profile, learned preferences, threshold and target countries |
+| `POST` | `/jobs/prefilter` | Expire stale jobs, then skip `new` jobs failing the location, title or keyword pre-filter |
+| `GET` | `/jobs/to-score` | `new` jobs with sanitized descriptions (first 3000 characters) |
+| `POST` | `/jobs/scores` | Store up to 30 scores: `queued` at or above the threshold, `skipped` otherwise |
+| `GET` | `/generation/context` | CV template, CV and cover letter rules, and the profile |
+| `POST` | `/drafts` | Render Claude's CV LaTeX and cover letter body into `.pending/<draft_id>/` and report page counts; the database is untouched |
+| `GET` | `/drafts/{draft_id}` | A draft's job, score, page counts and warnings |
+| `POST` | `/drafts/{draft_id}/commit` | Create or queue the job, register the draft as an application, and deliver only that one to Discord and Notion (`?deliver=false` to skip; a failed delivery leaves it `ready`) |
+
+All routes except `/health` and `/discord/interactions` require the `X-API-Key` header. A phase that is already running returns `409`. The `/jobs/*`, `/scoring/*`, `/generation/*` and `/drafts/*` routes back the MCP server and use typed request/response models (see `/docs`).
 
 ### MCP server
 
-[`mcp_server/`](mcp_server/README.md) exposes ApplAI to Claude Desktop and other MCP clients: score or dedupe a posting, list applications across the pipeline and `job_applications/`, and generate documents or run phases behind a human confirmation gate.
+[`mcp_server/`](mcp_server/README.md) lets Claude (Desktop or other MCP clients) do the LLM work: it scores postings and scraped jobs with the pipeline's rubric and writes the CV and cover letter, while ApplAI compiles them and delivers them to Discord. It also lists applications across the pipeline and `job_applications/`, and runs phases, with writes behind a human confirmation gate.
 
 ### Job statuses
 
 `new` → `queued` → `generating` → `ready` → `delivered` (sent to Discord) → `approved` / `rejected`.
-Jobs leave the flow as `skipped` (with a `skip_reason`: `keyword_filter`, `location`, `low_score`, `not_a_job`, `duplicate`, `expired`) or `failed` after 3 failed attempts (see `last_error`).
+Jobs leave the flow as `skipped` (with a `skip_reason`: `keyword_filter`, `title_filter`, `location`, `low_score`, `not_a_job`, `duplicate`, `expired`) or `failed` after 3 failed attempts (see `last_error`).
 
 ## Project Structure
 

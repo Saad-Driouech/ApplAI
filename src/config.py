@@ -97,6 +97,7 @@ class AppConfig:
     adzuna: AdzunaConfig
     paths: PathConfig
     tier1_provider: str        # "gemini" | "groq" | "ollama"
+    document_provider: str = "anthropic"   # "anthropic" | "groq"
     api_key: str = ""          # required on all API routes except /health and the Discord webhook
     allowed_countries: frozenset = field(
         default_factory=lambda: frozenset({"DE", "SA", "AE", "CH", "QA", "NL"})
@@ -108,6 +109,16 @@ class AppConfig:
     preferences_since: str = ""       # ISO date; earlier decisions are ignored when learning preferences
     debug: bool = False
 
+    # Without LLM keys, Claude scores and writes through the MCP server instead
+    @property
+    def scoring_llm_enabled(self) -> bool:
+        return {"gemini": bool(self.gemini.api_key), "groq": bool(self.groq.api_key)}.get(self.tier1_provider, True)
+
+    @property
+    def documents_llm_enabled(self) -> bool:
+        key = self.groq.api_key if self.document_provider == "groq" else self.anthropic.api_key
+        return bool(key)
+
 
 def load() -> AppConfig:
     """
@@ -117,7 +128,7 @@ def load() -> AppConfig:
     Raises EnvironmentError for any missing required variable.
     """
     gemini = GeminiConfig(
-        api_key=_require("GOOGLE_AI_API_KEY"),
+        api_key=_optional("GOOGLE_AI_API_KEY"),
         model=_optional("GEMINI_MODEL", "gemini-2.5-flash"),
         requests_per_day=int(_optional("GEMINI_RPD", "500")),
         requests_per_minute=int(_optional("GEMINI_RPM", "15")),
@@ -139,7 +150,7 @@ def load() -> AppConfig:
     )
 
     anthropic = AnthropicConfig(
-        api_key=_require("ANTHROPIC_API_KEY"),
+        api_key=_optional("ANTHROPIC_API_KEY"),
         model=_optional("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
     )
 
@@ -182,6 +193,12 @@ def load() -> AppConfig:
             "LLM_TIER1_PROVIDER=groq requires GROQ_API_KEY to be set."
         )
 
+    document_provider = _optional("DOCUMENT_LLM_PROVIDER", "anthropic").lower()
+    if document_provider not in {"anthropic", "groq"}:
+        raise EnvironmentError(
+            f"DOCUMENT_LLM_PROVIDER must be 'anthropic' or 'groq', got '{document_provider}'"
+        )
+
     preferences_since = _optional("PREFERENCES_SINCE", "")
     if preferences_since:
         try:
@@ -201,6 +218,7 @@ def load() -> AppConfig:
         adzuna=adzuna,
         paths=paths,
         tier1_provider=tier1_provider,
+        document_provider=document_provider,
         api_key=_optional("APPLAI_API_KEY", ""),
         score_threshold=float(_optional("SCORE_THRESHOLD", "6.0")),
         job_max_age_days=int(_optional("JOB_MAX_AGE_DAYS", "30")),

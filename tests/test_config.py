@@ -31,9 +31,31 @@ class TestConfigLoad:
 
     def test_missing_required_raises(self, monkeypatch):
         _patch_env(monkeypatch, {})
-        monkeypatch.delenv("GOOGLE_AI_API_KEY")
+        monkeypatch.delenv("DISCORD_BOT_TOKEN")
         config_module.reset()
-        with pytest.raises(EnvironmentError, match="GOOGLE_AI_API_KEY"):
+        with pytest.raises(EnvironmentError, match="DISCORD_BOT_TOKEN"):
+            config_module.load()
+
+    def test_llm_pipeline_enabled_with_keys(self, monkeypatch):
+        _patch_env(monkeypatch, {})
+        cfg = config_module.load()
+        assert cfg.scoring_llm_enabled and cfg.documents_llm_enabled
+
+    def test_llm_keys_are_optional(self, monkeypatch):
+        _patch_env(monkeypatch, {"GOOGLE_AI_API_KEY": "", "ANTHROPIC_API_KEY": ""})
+        cfg = config_module.load()
+        assert not cfg.scoring_llm_enabled and not cfg.documents_llm_enabled
+
+    def test_llm_flags_follow_providers(self, monkeypatch):
+        _patch_env(monkeypatch, {"GOOGLE_AI_API_KEY": "", "ANTHROPIC_API_KEY": "", "LLM_TIER1_PROVIDER": "ollama",
+                                 "DOCUMENT_LLM_PROVIDER": "groq",
+                                 "GROQ_API_KEY": "groq-key"})  # pragma: allowlist secret
+        cfg = config_module.load()
+        assert cfg.scoring_llm_enabled and cfg.documents_llm_enabled
+
+    def test_invalid_document_provider_raises(self, monkeypatch):
+        _patch_env(monkeypatch, {"DOCUMENT_LLM_PROVIDER": "openai"})
+        with pytest.raises(EnvironmentError, match="DOCUMENT_LLM_PROVIDER"):
             config_module.load()
 
     def test_invalid_provider_raises(self, monkeypatch):
