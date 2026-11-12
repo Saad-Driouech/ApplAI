@@ -6,6 +6,10 @@ Scrapes job boards, scores relevance with LLMs, generates tailored CVs and cover
 
 ## Architecture
 
+Two ways to run it:
+- **Claude as the brain (remote).** Claude scores jobs and writes the documents through the [MCP server](mcp_server/README.md), connected to claude.ai as a custom connector. ApplAI does the rest: scraping, dedup, the database, LaTeX compilation and delivery. A Claude Code scheduled task runs the batch twice a day, and everything lives on an always-on host. See [`deploy/README.md`](deploy/README.md).
+- **Standalone (local).** n8n triggers the phases every 12 hours, and ApplAI scores with Gemini and writes with Claude through their APIs. This is the diagram below.
+
 <p align="center">
   <img src="docs/architecture.svg" alt="ApplAI Architecture" width="800"/>
 </p>
@@ -91,7 +95,8 @@ The dashboard at http://localhost:8000 asks for the API key once and remembers i
 3. Copy the application's public key to `DISCORD_PUBLIC_KEY`
 4. Invite the bot to your server with Send Messages + Attach Files permissions
 5. Set the Interactions Endpoint URL to your public URL + `/discord/interactions`
-   - Use [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) for tunneling:
+   - On the remote host it's the stable `https://hooks.<your-domain>/discord/interactions`; Caddy exposes only that path ([`deploy/`](deploy/README.md))
+   - Locally, use [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) for tunneling:
      ```bash
      cloudflared tunnel --url http://localhost:8000
      ```
@@ -162,7 +167,7 @@ All routes except `/health` and `/discord/interactions` require the `X-API-Key` 
 
 ### MCP server
 
-[`mcp_server/`](mcp_server/README.md) lets Claude (Desktop or other MCP clients) do the LLM work: it scores postings and scraped jobs with the pipeline's rubric and writes the CV and cover letter, while ApplAI compiles them and delivers them to Discord. It also lists applications across the pipeline and `job_applications/`, and runs phases, with writes behind a human confirmation gate.
+[`mcp_server/`](mcp_server/README.md) lets Claude (Desktop or other MCP clients) do the LLM work: it scores postings and scraped jobs with the pipeline's rubric and writes the CV and cover letter, while ApplAI compiles them and delivers them to Discord. It also lists applications across the pipeline and `job_applications/`, and runs phases, with writes behind a human confirmation gate. It runs over stdio for Claude Desktop, or over HTTP as a claude.ai connector with WorkOS sign-in ([`deploy/`](deploy/README.md)).
 
 ### Job statuses
 
@@ -175,7 +180,14 @@ Jobs leave the flow as `skipped` (with a `skip_reason`: `keyword_filter`, `title
 applai/
 ├── Dockerfile
 ├── docker-compose.yml
+├── docker-compose.remote.yml   # Remote host: + MCP connector, Caddy, Syncthing; no n8n
 ├── requirements.txt
+├── automation/
+│   └── scheduled_run.md        # Playbook for the Claude scheduled task
+├── deploy/
+│   ├── Caddyfile               # TLS edge for mcp. and hooks.
+│   └── README.md               # Remote deployment runbook
+├── mcp_server/                 # MCP server (stdio + HTTP), own uv project and Dockerfile
 ├── config/
 │   └── .env.example
 ├── src/
@@ -211,6 +223,7 @@ applai/
 │       ├── latex_safety.py     # LaTeX validation
 │       └── sanitize.py         # Scraper input sanitization
 ├── scripts/
+│   ├── backup-db.sh            # Online SQLite backup (remote host, daily cron)
 │   ├── verify-setup.sh         # Post-deploy verification
 │   └── import-n8n-workflows.sh # n8n workflow import via API
 ├── n8n/

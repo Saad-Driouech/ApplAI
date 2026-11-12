@@ -152,7 +152,7 @@ npx @modelcontextprotocol/inspector uv run --directory mcp_server applai-mcp
 
 ### Remote connector (HTTP)
 
-`applai-mcp --transport http` (or `MCP_TRANSPORT=http`) serves streamable HTTP at `/mcp` on `HTTP_HOST:HTTP_PORT` (default `127.0.0.1:8080`). Put it behind a TLS reverse proxy. It needs three more settings, which stdio never reads:
+`applai-mcp --transport http` (or `MCP_TRANSPORT=http`) serves streamable HTTP at `/mcp` on `HTTP_HOST:HTTP_PORT` (default `127.0.0.1:8080`). Put it behind a TLS reverse proxy. The [`Dockerfile`](Dockerfile) and [`../deploy/`](../deploy/README.md) (Compose, Caddy, runbook) do this on a server. It needs three more settings, which stdio never reads:
 
 | Setting | Value |
 |---|---|

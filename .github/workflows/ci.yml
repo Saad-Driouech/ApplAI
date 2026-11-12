@@ -49,6 +49,9 @@ jobs:
           uv export --locked --no-dev --no-emit-project --format requirements-txt > "$RUNNER_TEMP/mcp-requirements.txt"
           uv run pip-audit -r "$RUNNER_TEMP/mcp-requirements.txt" --disable-pip
 
+      - name: Build image
+        run: docker build -t applai-mcp:ci .
+
   security:
     runs-on: ubuntu-latest
 
