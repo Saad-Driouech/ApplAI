@@ -47,6 +47,12 @@ def draft(**overrides: Any) -> dict:
     return {**base, **overrides}
 
 
+COMMITTED = {"job_id": "j1", "application_id": DRAFT_ID, "status": "delivered", "score": 8.0,
+             "cv_path": f"/w/.pending/{DRAFT_ID}/cv.pdf", "cover_letter_path": f"/w/.pending/{DRAFT_ID}/cover_letter.pdf",
+             "approved_dir": "germany/Aleph_Alpha"}
+COMMIT = f"POST /drafts/{DRAFT_ID}/commit"
+
+
 class FakeApi:
     """Routes '<METHOD> <path>' to a JSON body, a (status, body) tuple, or a callable(request)."""
 

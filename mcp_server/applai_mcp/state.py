@@ -1,4 +1,4 @@
-"""Per-connection state shared by tools, built in the server lifespan."""
+"""Per-process state shared by tools, built in the server lifespan (once per process, also over HTTP)."""
 from __future__ import annotations
 
 from collections.abc import AsyncIterator

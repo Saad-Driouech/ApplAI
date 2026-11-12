@@ -6,7 +6,7 @@ from mcp import Client
 from mcp_types import ElicitResult
 
 from applai_mcp.server import create_server
-from conftest import DRAFT_ID, JD, body, call, call_error, draft, job, resolve_response
+from conftest import COMMIT, COMMITTED, DRAFT_ID, JD, body, call, call_error, draft, job, resolve_response
 
 pytestmark = pytest.mark.anyio
 
@@ -204,10 +204,6 @@ class TestApiDownFallsBackToFolders:
 
 CV_TEX = "\\documentclass{article}\\begin{document}" + "Tailored CV. " * 20 + "\\end{document}"
 BODY = "First paragraph about the role. " * 10 + "\n\n" + "Second paragraph. " * 5
-COMMITTED = {"job_id": "j1", "application_id": DRAFT_ID, "status": "delivered", "score": 8.0,
-             "cv_path": f"/w/.pending/{DRAFT_ID}/cv.pdf", "cover_letter_path": f"/w/.pending/{DRAFT_ID}/cover_letter.pdf",
-             "approved_dir": "germany/Aleph_Alpha"}
-COMMIT = f"POST /drafts/{DRAFT_ID}/commit"
 
 
 @pytest.fixture
