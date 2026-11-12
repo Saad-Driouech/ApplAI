@@ -95,6 +95,48 @@ def is_excluded_title(title: str) -> bool:
     return bool(_EXCLUDED_TITLE_PATTERN.search(title or ""))
 
 
+def prefilter_reason(job: dict, allowed_countries: Optional[frozenset]) -> Optional[tuple[str, str]]:
+    """(skip_reason, reasoning) when a pre-filter skips the job without scoring, else None."""
+    country = job.get("country")
+    if allowed_countries and country != REMOTE and country not in allowed_countries:
+        return "location", f"Auto-skipped: location outside target countries ({job.get('city') or country})"
+    if is_excluded_title(job.get("title", "")):
+        return "title_filter", "Auto-skipped: working-student or above-senior title"
+    if not has_ai_keywords(job.get("title", ""), job.get("description", "")):
+        return "keyword_filter", "Auto-skipped: no AI/ML keywords in title or description"
+    return None
+
+
+def prefilter_new_jobs(db_path: Path, allowed_countries: Optional[frozenset]) -> tuple[int, list[dict]]:
+    """Skip every 'new' job a pre-filter rejects. Returns (skipped count, remaining 'new' jobs, newest first)."""
+    with db.get_conn(db_path) as conn:
+        jobs = [dict(r) for r in db.get_jobs_by_status(conn, "new", limit=None)]
+
+    remaining, skipped = [], 0
+    for job in jobs:
+        skip = prefilter_reason(job, allowed_countries)
+        if skip is None:
+            remaining.append(job)
+            continue
+        with db.get_conn(db_path) as conn:
+            db.update_score(conn, job["id"], 0.0, skip[1], new_status="skipped", skip_reason=skip[0])
+        skipped += 1
+        log.debug("Job pre-filtered (%s) | %s @ %s", skip[0], job["title"], job["company"])
+    return skipped, remaining
+
+
+def apply_score(conn, job_id: str, result: ScoreResult, threshold: float) -> tuple[str, Optional[str]]:
+    """Store a score and move the job on. Returns (status, skip_reason): 'queued' at or above threshold."""
+    if not result.is_job_posting:
+        status, skip_reason = "skipped", "not_a_job"
+    elif result.score >= threshold:
+        status, skip_reason = "queued", None
+    else:
+        status, skip_reason = "skipped", "low_score"
+    db.update_score(conn, job_id, result.score, result.reasoning, new_status=status, skip_reason=skip_reason)
+    return status, skip_reason
+
+
 class Scorer:
     """
     Orchestrates the scoring pipeline:
@@ -126,7 +168,7 @@ class Scorer:
 
     def run(self) -> dict[str, int]:
         """
-        Pre-filter every 'new' job, then LLM-score up to batch_size of them (newest first).
+        Pre-filter every 'new' job, then LLM-score up to batch_size of the rest (newest first).
         Returns a summary dict:
         {scored, queued, skipped, filtered, not_a_job, deferred, errors, parse_errors, quota_hit}
 
@@ -137,64 +179,15 @@ class Scorer:
             "deferred": 0, "errors": 0, "parse_errors": 0, "quota_hit": 0,
         }
 
-        with db.get_conn(self._db_path) as conn:
-            jobs = db.get_jobs_by_status(conn, "new", limit=None)
+        stats["filtered"], jobs = prefilter_new_jobs(self._db_path, self._allowed_countries)
 
-        log.info("Scoring: %d new jobs, up to %d LLM calls", len(jobs), self._batch_size)
+        log.info("Scoring: %d new jobs after pre-filters, up to %d LLM calls", len(jobs), self._batch_size)
 
         llm_calls = 0
         llm_stopped = False   # quota exhausted or provider misconfigured
 
-        for row in jobs:
-            job = dict(row)
+        for job in jobs:
             job_id = job["id"]
-
-            # ── Location pre-filter: skip jobs outside target countries ──
-            country = job.get("country")
-            if self._allowed_countries and country != REMOTE and country not in self._allowed_countries:
-                with db.get_conn(self._db_path) as conn:
-                    db.update_score(
-                        conn,
-                        job_id=job_id,
-                        score=0.0,
-                        reasoning=f"Auto-skipped: location outside target countries ({job.get('city') or job.get('country')})",
-                        new_status="skipped",
-                        skip_reason="location",
-                    )
-                stats["filtered"] += 1
-                continue
-
-            # ── Title pre-filter: working-student and above-senior roles ──
-            if is_excluded_title(job.get("title", "")):
-                with db.get_conn(self._db_path) as conn:
-                    db.update_score(
-                        conn,
-                        job_id=job_id,
-                        score=0.0,
-                        reasoning="Auto-skipped: working-student or above-senior title",
-                        new_status="skipped",
-                        skip_reason="title_filter",
-                    )
-                stats["filtered"] += 1
-                continue
-
-            # ── Keyword pre-filter: skip non-AI jobs without LLM call ────
-            if not has_ai_keywords(job.get("title", ""), job.get("description", "")):
-                with db.get_conn(self._db_path) as conn:
-                    db.update_score(
-                        conn,
-                        job_id=job_id,
-                        score=0.0,
-                        reasoning="Auto-skipped: no AI/ML keywords in title or description",
-                        new_status="skipped",
-                        skip_reason="keyword_filter",
-                    )
-                stats["filtered"] += 1
-                log.debug(
-                    "Job filtered (no AI keywords) | %s @ %s",
-                    job["title"], job["company"],
-                )
-                continue
 
             if llm_stopped or llm_calls >= self._batch_size:
                 stats["deferred"] += 1
@@ -240,35 +233,16 @@ class Scorer:
                 self._record_failure(job_id, exc)
                 continue
 
-            if not result.is_job_posting:
-                with db.get_conn(self._db_path) as conn:
-                    db.update_score(
-                        conn,
-                        job_id=job_id,
-                        score=result.score,
-                        reasoning=result.reasoning,
-                        new_status="skipped",
-                        skip_reason="not_a_job",
-                    )
+            with db.get_conn(self._db_path) as conn:
+                status, skip_reason = apply_score(conn, job_id, result, self._threshold)
+
+            if skip_reason == "not_a_job":
                 stats["not_a_job"] += 1
                 log.info("Not a job posting, skipped | %s @ %s", job["title"], job["company"])
                 continue
 
-            above_threshold = result.score >= self._threshold
-            new_status = "queued" if above_threshold else "skipped"
-
-            with db.get_conn(self._db_path) as conn:
-                db.update_score(
-                    conn,
-                    job_id=job_id,
-                    score=result.score,
-                    reasoning=result.reasoning,
-                    new_status=new_status,
-                    skip_reason="low_score" if not above_threshold else None,
-                )
-
             stats["scored"] += 1
-            if above_threshold:
+            if status == "queued":
                 stats["queued"] += 1
                 log.info(
                     "Job QUEUED | score=%.1f | %s @ %s",

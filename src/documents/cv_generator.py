@@ -1,10 +1,9 @@
 """
-CV generator: calls the Anthropic API to tailor the LaTeX CV template,
-then compiles it to PDF via pdflatex.
+CV generator: tailors the LaTeX CV template for a job, then compiles it to PDF via pdflatex.
 
 Pipeline per job:
   1. Read base .tex template and profile_summary.md from disk (dynamic — always latest)
-  2. Call Anthropic API: system = rules + profile + CV template, user = job details
+  2. Tailor it: the Anthropic API (generate) or Claude through the MCP server (render only)
   3. Validate + compile in a sandbox via latex_safety.compile_tex()
   4. Return path to the generated PDF
 """
@@ -21,9 +20,8 @@ from src.utils.latex_safety import LatexCompileError, UnsafeLatexError, compile_
 
 log = get_logger(__name__)
 
-_CV_SYSTEM_TEMPLATE = """\
-You are a professional CV editor. Tailor the LaTeX CV for a target job.
-
+# Shared with Claude through the MCP server, so both writers follow the same rules
+CV_RULES = """\
 ## Rules
 - Keep the LaTeX structure intact; only modify text content.
 - Do NOT add \\write18, \\input, \\include, \\openin, \\openout, or any file I/O commands.
@@ -41,7 +39,12 @@ You are a professional CV editor. Tailor the LaTeX CV for a target job.
 - NEVER use "leverage", "spearheaded", "passionate", "drove", "synergy", "cutting-edge", "orchestrated", or similar AI cliches.
 - Use direct, plain language. "Built X that did Y" is better than "Spearheaded the development of X".
 - Keep bullet points factual: action verb + what + measurable result. No filler.
+"""
 
+_CV_SYSTEM_TEMPLATE = """\
+You are a professional CV editor. Tailor the LaTeX CV for a target job.
+
+""" + CV_RULES + """
 ## Candidate Profile & Strategy
 {profile}
 
@@ -75,7 +78,7 @@ def _strip_fences(text: str) -> str:
 
 class CVGenerator:
     """
-    Generates a tailored PDF CV for a specific job via the Anthropic API.
+    Generates a tailored PDF CV for a specific job, written by the Anthropic API or by Claude.
 
     Args:
         template_path: Path to the base .tex CV file.
@@ -101,15 +104,26 @@ class CVGenerator:
 
     def generate(self, job: dict, gemini_reasoning: str = "", output_folder: Path | None = None) -> Path:
         """
-        Generate a tailored PDF CV for *job*.
+        Tailor the CV for *job* with the document LLM, then render it.
 
         Returns the path to the compiled .pdf file.
         Raises CVGenerationError on any failure.
         """
+        return self.render(self._tailor_with_api(job, gemini_reasoning), job, output_folder)
+
+    def render(self, tex_source: str, job: dict, output_folder: Path | None = None) -> Path:
+        """
+        Compile an already tailored CV (from the LLM or from Claude) into *output_folder*.
+
+        Returns the path to the compiled .pdf file.
+        Raises CVGenerationError on any failure.
+        """
+        tex_source = _strip_fences(tex_source)
+        if "\\documentclass" not in tex_source or "\\end{document}" not in tex_source:
+            raise CVGenerationError("CV source is not a complete LaTeX document")
+
         job_folder = output_folder or self._job_folder(job)
         job_folder.mkdir(parents=True, exist_ok=True)
-
-        tex_source = self._tailor_with_api(job, gemini_reasoning)
         tex_path = job_folder / "cv.tex"
         tex_path.write_text(tex_source, encoding="utf-8")
         self._copy_template_assets(job_folder)
@@ -117,7 +131,7 @@ class CVGenerator:
         try:
             pdf_path = compile_tex(tex_path, pdflatex_bin=self._pdflatex)
         except UnsafeLatexError as exc:
-            log.error("API output failed LaTeX safety check for job %s: %s", job.get("id", "?"), exc)
+            log.error("CV source failed LaTeX safety check for job %s: %s", job.get("id", "?"), exc)
             raise CVGenerationError(str(exc)) from exc
         except LatexCompileError as exc:
             raise CVGenerationError(str(exc)) from exc

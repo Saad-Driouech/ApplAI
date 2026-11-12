@@ -98,7 +98,7 @@ def phase_scrape(cfg) -> int:
     return total_new
 
 
-def _expire_stale(cfg) -> int:
+def expire_stale(cfg) -> int:
     with db.get_conn(cfg.paths.db_path) as conn:
         expired = db.expire_stale_jobs(conn, cfg.job_max_age_days)
     if expired:
@@ -167,7 +167,7 @@ def phase_score(cfg) -> dict:
     """Expire stale jobs, then score 'new' jobs with the Tier-1 LLM."""
     from src.matching.scorer import Scorer
 
-    expired = _expire_stale(cfg)
+    expired = expire_stale(cfg)
     cv_summary = load_cv_summary(cfg)
     scoring_client, fallback_client = build_tier1_clients(cfg)
 
@@ -279,6 +279,15 @@ def build_generators(cfg, cv_template_path: Path | None = None) -> tuple | None:
     return cv_gen, cl_gen
 
 
+def cleanup_stale_bundles(cfg) -> int:
+    """Delete old .pending/ folders (abandoned drafts, failed runs) unless an application awaits a decision."""
+    from src.utils.file_manager import cleanup_stale_pending
+
+    with db.get_conn(cfg.paths.db_path) as conn:
+        awaiting = {r["id"] for r in conn.execute("SELECT id FROM applications WHERE user_decision IS NULL")}
+    return cleanup_stale_pending(cfg.paths.working_dir, keep=awaiting)
+
+
 def generate_one(cfg, job: dict, cv_gen, cl_gen) -> str | None:
     """
     Generate a bundle for one 'queued' job into .pending/<app_id>/ and mark it 'ready'.
@@ -327,12 +336,8 @@ def generate_one(cfg, job: dict, cv_gen, cl_gen) -> str | None:
 @_exclusive("generate")
 def phase_generate(cfg) -> int:
     """Generate CV + cover letter for all 'queued' jobs."""
-    from src.utils.file_manager import cleanup_stale_pending
-
-    with db.get_conn(cfg.paths.db_path) as conn:
-        awaiting = {r["id"] for r in conn.execute("SELECT id FROM applications WHERE user_decision IS NULL")}
-    cleanup_stale_pending(cfg.paths.working_dir, keep=awaiting)
-    _expire_stale(cfg)
+    cleanup_stale_bundles(cfg)
+    expire_stale(cfg)
 
     generators = build_generators(cfg)
     if generators is None:

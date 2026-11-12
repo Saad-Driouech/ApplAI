@@ -32,27 +32,8 @@ from src.scrapers.location import names_country
 
 log = get_logger(__name__)
 
-_SCORE_PROMPT_TEMPLATE = """\
-You are a job-fit evaluator for an AI/ML professional. Score how well the candidate fits this job.
-
-## Candidate Profile
-{cv_summary}
-
-## Job Posting
-Title: {title}
-Company: {company}
-Location: {location}
-Description:
-{description}
-
-## Scoring Instructions
-Return ONLY a JSON object with exactly these keys, in this order:
-- "is_job_posting": boolean, false if this is not an actual job vacancy (e.g. a product, article, or advertisement)
-- "score": float between 0.0 and 10.0
-- "reasoning": string of max 100 words explaining the score
-- "must_haves_met": list of strings (key requirements the candidate satisfies)
-- "gaps": list of strings (important missing skills or experience)
-
+# Shared with Claude through the MCP server, so both scorers apply the same rules
+SCORING_RUBRIC = """\
 ## Scoring Rubric
   9-10: Near-perfect match — core stack, seniority, and domain all align
   7-9:  Strong fit — meets most requirements, minor gaps are learnable
@@ -83,11 +64,35 @@ and the candidate's profile does not meet it, score 0-2 and say so in the reason
 on-site or hybrid roles in a country where the profile gives no work authorization. Remote roles \
 open worldwide or in Europe/EMEA are eligible.
 - "Preferred" or "nice to have" requirements should NOT lower the score significantly.
+"""
+
+_SCORE_PROMPT_TEMPLATE = """\
+You are a job-fit evaluator for an AI/ML professional. Score how well the candidate fits this job.
+
+## Candidate Profile
+{cv_summary}
+
+## Job Posting
+Title: {title}
+Company: {company}
+Location: {location}
+Description:
+{description}
+
+## Scoring Instructions
+Return ONLY a JSON object with exactly these keys, in this order:
+- "is_job_posting": boolean, false if this is not an actual job vacancy (e.g. a product, article, or advertisement)
+- "score": float between 0.0 and 10.0
+- "reasoning": string of max 100 words explaining the score
+- "must_haves_met": list of strings (key requirements the candidate satisfies)
+- "gaps": list of strings (important missing skills or experience)
+
+""" + SCORING_RUBRIC + """\
 - Return raw JSON, no markdown fences.
 {user_preferences}"""
 
 
-def _location_text(job: dict) -> str:
+def location_text(job: dict) -> str:
     """Location as stated by the source; a country is added only when the text itself names it."""
     city = (job.get("city") or "").strip()
     country = job.get("country") or ""
@@ -104,7 +109,7 @@ def build_score_prompt(job: dict, cv_summary: str, user_preferences: str = "") -
         cv_summary=cv_summary,
         title=job.get("title", ""),
         company=job.get("company", ""),
-        location=_location_text(job),
+        location=location_text(job),
         description=(job.get("description") or "")[:3000],
         user_preferences=user_preferences,
     )
