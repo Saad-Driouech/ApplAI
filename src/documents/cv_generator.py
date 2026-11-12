@@ -35,7 +35,8 @@ CV_RULES = """\
 - Only use information present in the CV source below.
 
 ## Writing Style (STRICT)
-- NEVER use em dashes or en dashes. Use commas, periods, or semicolons instead.
+- NEVER use em dashes or en dashes in text. Use commas, periods, or semicolons instead.
+  Exception: keep the template's `--` in date ranges (e.g. 03/2025 -- 09/2026).
 - NEVER use "leverage", "spearheaded", "passionate", "drove", "synergy", "cutting-edge", "orchestrated", or similar AI cliches.
 - Use direct, plain language. "Built X that did Y" is better than "Spearheaded the development of X".
 - Keep bullet points factual: action verb + what + measurable result. No filler.
