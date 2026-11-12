@@ -2,9 +2,9 @@
 LaTeX safety: validation, escaping, and sandboxed compilation.
 
 Two independent layers: validate_tex_file() rejects file-I/O, file-embedding and
-code-execution primitives; compile_tex() runs pdflatex confined to its folder
-(paranoid kpathsea access) with no secrets in its environment. Always compile
-through compile_tex().
+code-execution primitives; compile_tex() runs pdflatex or xelatex confined to its
+folder (paranoid kpathsea access) with no secrets in its environment. Always
+compile through compile_tex().
 """
 import os
 import re
@@ -38,6 +38,10 @@ DANGEROUS_PATTERNS = [
     (r"\^\^", "TeX character-code escape (can hide commands)"),
     (r"\\url\{[^}]*\|", "pipe in url command"),
 ]
+
+LATEX_ENGINES = ("pdflatex", "xelatex")  # never LuaLaTeX: it runs Lua code
+_ENGINE_COMMENT = re.compile(r"^%\s*!\s*TEX\s+(?:TS-)?program\s*=\s*([A-Za-z]+)", re.IGNORECASE | re.MULTILINE)
+_PAGES = re.compile(r"Output written on .*?\((\d+) pages?\b")
 
 _COMPILED_PATTERNS = [(re.compile(p), desc) for p, desc in DANGEROUS_PATTERNS]
 
@@ -104,9 +108,30 @@ def _sandbox_env() -> dict[str, str]:
     return env
 
 
+def template_engine(tex_source: str) -> str:
+    """Engine named by a '% !TEX program = xelatex' comment at the top of a template; pdflatex otherwise."""
+    match = _ENGINE_COMMENT.search(tex_source[:2000])
+    engine = match.group(1).lower() if match else "pdflatex"
+    if engine not in LATEX_ENGINES:
+        log.warning("Unsupported LaTeX engine '%s' requested; using pdflatex", engine)
+        return "pdflatex"
+    return engine
+
+
+def page_count(pdf_path: Path) -> int | None:
+    """Pages the engine reported in the log next to *pdf_path*, or None if unknown."""
+    try:
+        log_text = pdf_path.with_suffix(".log").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    matches = _PAGES.findall(log_text)
+    return int(matches[-1]) if matches else None
+
+
 def compile_tex(tex_path: Path, pdflatex_bin: str = "pdflatex", timeout: int = 60) -> Path:
     """
     Validate, then compile *tex_path* to PDF inside its own folder.
+    *pdflatex_bin* is the engine binary: pdflatex or xelatex.
 
     Raises UnsafeLatexError, LatexCompileError, or subprocess.TimeoutExpired.
     """
@@ -131,7 +156,7 @@ def compile_tex(tex_path: Path, pdflatex_bin: str = "pdflatex", timeout: int = 6
         )
     if proc.returncode != 0:
         output_tail = (proc.stdout or proc.stderr or "")[-1500:]
-        raise LatexCompileError(f"pdflatex exited with {proc.returncode}:\n{output_tail}")
+        raise LatexCompileError(f"{Path(pdflatex_bin).name} exited with {proc.returncode}:\n{output_tail}")
 
     pdf_path = tex_path.with_suffix(".pdf")
     if not pdf_path.exists():

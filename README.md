@@ -114,7 +114,7 @@ All configuration is via environment variables in `config/.env`. See [`config/.e
 | `PREFERENCES_SINCE` | Only decisions on or after this date (`YYYY-MM-DD`) feed the learned scoring preferences | — (all) |
 | `DISCORD_ALLOWED_USER_IDS` | Comma-separated Discord user IDs allowed to decide | anyone |
 | `APPLAI_WORKING_DIR` | Directory for job applications and profile files | — |
-| `APPLAI_CV_TEMPLATE` | Path to your LaTeX CV template | — |
+| `APPLAI_CV_TEMPLATE` | Path to your LaTeX CV template. Tailored CVs may not have more pages than it; a `% !TEX program = xelatex` line at the top compiles it with XeLaTeX (pdfLaTeX otherwise) | — |
 | `APPLAI_CL_TEMPLATE` | Path to your LaTeX cover letter template | — |
 | `CANDIDATE_NAME` | Your full name (used in cover letters) | — |
 | `CANDIDATE_EMAIL` | Your email | — |

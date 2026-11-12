@@ -6,7 +6,14 @@ from unittest import mock
 
 import pytest
 
-from src.utils.latex_safety import UnsafeLatexError, compile_tex, escape_latex, validate_tex_file
+from src.utils.latex_safety import (
+    UnsafeLatexError,
+    compile_tex,
+    escape_latex,
+    page_count,
+    template_engine,
+    validate_tex_file,
+)
 
 
 def _write_tex(content: str) -> str:
@@ -99,6 +106,29 @@ def test_missing_file():
     assert not result["safe"]
 
 
+@pytest.mark.parametrize("source,engine", [
+    ("% !TEX program = xelatex\n\\documentclass{article}", "xelatex"),
+    ("%!TEX TS-program = XeLaTeX\n", "xelatex"),
+    ("% !TEX program = pdflatex\n", "pdflatex"),
+    ("% !TEX program = lualatex\n", "pdflatex"),  # LuaLaTeX runs Lua code: never allowed
+    ("\\documentclass{article}\n", "pdflatex"),
+    ("x" * 3000 + "\n% !TEX program = xelatex\n", "pdflatex"),  # only the top of the file counts
+])
+def test_template_engine(source, engine):
+    assert template_engine(source) == engine
+
+
+class TestPageCount:
+    def test_reads_last_count_from_log(self, tmp_path):
+        pdf = tmp_path / "cv.pdf"
+        pdf.with_suffix(".log").write_text(
+            "Output written on cv.pdf (2 pages, 10 bytes).\n...\nOutput written on cv.pdf (1 page, 9 bytes).")
+        assert page_count(pdf) == 1
+
+    def test_unknown_without_log(self, tmp_path):
+        assert page_count(tmp_path / "cv.pdf") is None
+
+
 class TestEscapeLatex:
     def test_all_specials_escaped(self):
         assert escape_latex(r"R&D 100% $5 #1 a_b {x} ~ ^ \input") == (
@@ -156,3 +186,53 @@ class TestCompileTex:
              mock.patch("src.utils.latex_safety.subprocess.run", side_effect=run):
             with pytest.raises(LatexCompileError, match="Undefined control sequence"):
                 compile_tex(tex)
+
+    def test_xelatex_runs_with_the_same_sandbox(self, tex):
+        with mock.patch("src.utils.latex_safety.shutil.which", return_value="/usr/bin/xelatex"), \
+             mock.patch("src.utils.latex_safety.subprocess.run", side_effect=self._fake_pdflatex(tex)) as run:
+            compile_tex(tex, pdflatex_bin="xelatex")
+        cmd, env = run.call_args.args[0], run.call_args.kwargs["env"]
+        assert cmd[:2] == ["xelatex", "-no-shell-escape"]
+        assert (env["openin_any"], env["shell_escape"]) == ("p", "f")
+
+
+class TestCVTemplate:
+    """The engine and page limit come from the template, never from the generated text."""
+
+    @pytest.fixture
+    def generator(self, tmp_path):
+        from src.documents.cv_generator import CVGenerator
+
+        template = tmp_path / "tpl" / "cv.tex"
+        template.parent.mkdir()
+        template.write_text("% !TEX program = xelatex\n\\documentclass{article}\\begin{document}CV\\end{document}")
+        (template.parent / "photo.jpg").write_bytes(b"jpg")
+        return CVGenerator(template_path=template, output_dir=tmp_path)
+
+    def _fake_engine(self, pages):
+        def run(cmd, cwd, **kwargs):
+            tex = cwd / cmd[-1]
+            tex.with_suffix(".pdf").write_bytes(b"%PDF")
+            tex.with_suffix(".log").write_text(f"Output written on {tex.stem}.pdf ({pages} pages, 1 bytes).")
+            assert (cwd / "photo.jpg").exists()  # template images are copied next to it
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        return run
+
+    def test_template_engine_used_for_generated_cv(self, generator, tmp_path):
+        out = tmp_path / "out"
+        source = "% !TEX program = pdflatex\n\\documentclass{article}\\begin{document}Tailored\\end{document}"
+        with mock.patch("src.utils.latex_safety.shutil.which", return_value="/usr/bin/xelatex"), \
+             mock.patch("src.utils.latex_safety.subprocess.run", side_effect=self._fake_engine(1)) as run:
+            generator.render(source, {"id": "j1"}, output_folder=out)
+        assert run.call_args.args[0][0] == "xelatex"
+
+    def test_template_pages_compiled_once_per_change(self, generator):
+        with mock.patch("src.utils.latex_safety.shutil.which", return_value="/usr/bin/xelatex"), \
+             mock.patch("src.utils.latex_safety.subprocess.run", side_effect=self._fake_engine(2)) as run:
+            assert generator.template_pages() == 2
+            assert generator.template_pages() == 2
+        assert run.call_count == 2  # two passes of a single compile
+
+    def test_template_that_does_not_compile(self, generator):
+        with mock.patch("src.utils.latex_safety.shutil.which", return_value=None):
+            assert generator.template_pages() is None
