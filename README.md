@@ -7,7 +7,7 @@ Scrapes job boards, scores relevance with LLMs, generates tailored CVs and cover
 ## Architecture
 
 Two ways to run it:
-- **Claude as the brain (remote).** Claude scores jobs and writes the documents through the [MCP server](mcp_server/README.md), connected to claude.ai as a custom connector. ApplAI does the rest: scraping, dedup, the database, LaTeX compilation and delivery. A Claude Code scheduled task runs the batch twice a day, and everything lives on an always-on host. See [`deploy/README.md`](deploy/README.md).
+- **Claude as the brain (remote).** Claude scores jobs and writes the documents through the [MCP server](mcp_server/README.md), connected to claude.ai as a custom connector. ApplAI does the rest: scraping, dedup, the database, LaTeX compilation and delivery. A Claude Code scheduled task runs the batch twice a day, and everything lives on an always-on host, so it works from any device with no laptop needed. See [`deploy/README.md`](deploy/README.md).
 - **Standalone (local).** n8n triggers the phases every 12 hours, and ApplAI scores with Gemini and writes with Claude through their APIs. This is the diagram below.
 
 <p align="center">

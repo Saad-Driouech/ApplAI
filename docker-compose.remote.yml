@@ -1,4 +1,4 @@
-# Remote host stack (see deploy/README.md). Layered on the base file, which the Mac keeps using unchanged:
+# Remote host stack (see deploy/README.md). Layered on the base file, which the local setup keeps using unchanged:
 #   docker compose -f docker-compose.yml -f docker-compose.remote.yml up -d --build
 # Adds the MCP connector, Caddy (public TLS edge) and Syncthing. n8n doesn't run here (profile "n8n");
 # a Claude scheduled task drives the pipeline through the connector instead.
@@ -72,7 +72,7 @@ services:
     networks:
       - applai-net
 
-  # ── Folder sync with the Mac, over the tailnet only ─────────────────────
+  # ── Folder sync with your computer, over the tailnet only ───────────────
   syncthing:
     image: syncthing/syncthing:2.1.6
     container_name: applai-syncthing

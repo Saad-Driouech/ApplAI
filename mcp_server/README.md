@@ -1,6 +1,6 @@
 # ApplAI MCP Server
 
-An [MCP](https://modelcontextprotocol.io) server that lets Claude work with ApplAI and with the application folders in `job_applications/`. It runs locally over stdio for Claude Desktop, or over HTTP as a claude.ai custom connector (web, iPhone, Desktop and scheduled tasks), with sign-in through WorkOS AuthKit.
+An [MCP](https://modelcontextprotocol.io) server that lets Claude work with ApplAI and with the application folders in `job_applications/`. It runs locally over stdio for Claude Desktop, or over HTTP as a claude.ai custom connector, so it can be used from any device through any Claude client (web, mobile or desktop app) and from scheduled tasks, with sign-in through WorkOS AuthKit.
 
 **Claude does the LLM work, ApplAI does the rest.** Claude scores postings and scraped jobs with the same rubric as the pipeline's scorer, and writes the tailored CV (LaTeX) and cover letter. ApplAI scrapes job boards, stores and deduplicates jobs, compiles the documents with its sandboxed pdflatex, and delivers them to Discord for approval and to Notion. The server also checks whether you've already applied, lists and summarises applications across the pipeline database and your folders, and runs pipeline phases. Prompts cover applying to a job, the daily batch, and interview prep and status checks with the claude.ai Gmail and Google Calendar connectors and web search.
 
@@ -131,7 +131,7 @@ Use container paths here, because the API runs inside Docker.
 
 ### Claude Desktop
 
-Add the server to `~/Library/Application Support/Claude/claude_desktop_config.json`, using absolute paths (`which uv`), then restart Claude Desktop:
+Add the server to Claude Desktop's `claude_desktop_config.json` (Settings → Developer → Edit Config), using absolute paths (`which uv`), then restart Claude Desktop:
 
 ```json
 {
@@ -166,7 +166,7 @@ npx @modelcontextprotocol/inspector uv run --directory mcp_server applai-mcp
 3. If asked for redirect URIs, allow `https://claude.ai/api/mcp/auth_callback` and `https://claude.com/api/mcp/auth_callback`.
 4. Sign in once, then copy your user id and the AuthKit domain into the settings above.
 
-**claude.ai:** Settings → Connectors → Add custom connector. URL `MCP_PUBLIC_URL/mcp`, leave client ID and secret empty, then Connect and sign in at WorkOS. The connector is then available on the web, in the iPhone app, in Claude Desktop and in scheduled tasks. In Desktop, enable either the stdio server or the connector, not both.
+**claude.ai:** Settings → Connectors → Add custom connector. URL `MCP_PUBLIC_URL/mcp`, leave client ID and secret empty, then Connect and sign in at WorkOS. The connector is then available in every Claude client (web, mobile and desktop apps) and in scheduled tasks. In Desktop, enable either the stdio server or the connector, not both.
 
 ## Development
 

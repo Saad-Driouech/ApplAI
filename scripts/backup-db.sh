@@ -2,7 +2,7 @@
 # applai/scripts/backup-db.sh — Online backup of the ApplAI SQLite DB on the remote host.
 # Run daily from cron as the owner of /srv/applai (UID 1000) or root, e.g.:
 #   15 3 * * * /srv/applai/applai/scripts/backup-db.sh >> /srv/applai/backup.log 2>&1
-# Backups land in APPLAI_BACKUP_DIR (a send-only Syncthing folder to the Mac); the newest KEEP are kept.
+# Backups land in APPLAI_BACKUP_DIR (a send-only Syncthing folder to your computer); the newest KEEP are kept.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
