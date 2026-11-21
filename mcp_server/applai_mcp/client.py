@@ -8,7 +8,18 @@ import httpx2
 
 from applai_mcp import errors
 from applai_mcp.config import Settings
-from applai_mcp.models import JobDetail, JobSummary, ScoreResult
+from applai_mcp.models import (
+    Draft,
+    GenerateResult,
+    GenerationContext,
+    JobDetail,
+    JobSummary,
+    JobToScore,
+    PrefilterResult,
+    ResolvedPosting,
+    ScoreOutcome,
+    ScoringContext,
+)
 
 PHASES = ("scrape", "score", "generate", "deliver")
 
@@ -37,18 +48,43 @@ class ApplAIClient:
             raise errors.from_response(resp)
         return resp.json()
 
-    async def score_job(self, payload: dict[str, Any]) -> ScoreResult:
-        # Scoring is one LLM call; allow it the generate budget rather than the read timeout
-        data = await self._request("POST", "/jobs/score", json=payload,
-                                   timeout=self._settings.generate_timeout_seconds)
-        return ScoreResult.model_validate(data)
+    async def resolve_job(self, payload: dict[str, Any]) -> ResolvedPosting:
+        return ResolvedPosting.model_validate(await self._request("POST", "/jobs/resolve", json=payload))
 
-    async def generate_job(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return await self._request("POST", "/jobs/generate", json=payload,
-                                   timeout=self._settings.generate_timeout_seconds)
+    async def scoring_context(self) -> ScoringContext:
+        return ScoringContext.model_validate(await self._request("GET", "/scoring/context"))
 
-    async def get_job(self, job_id: str) -> JobDetail:
-        return JobDetail.model_validate(await self._request("GET", f"/jobs/{quote(job_id, safe='')}"))
+    async def prefilter(self) -> PrefilterResult:
+        return PrefilterResult.model_validate(await self._request("POST", "/jobs/prefilter"))
+
+    async def jobs_to_score(self, limit: int) -> list[JobToScore]:
+        data = await self._request("GET", "/jobs/to-score", params={"limit": limit})
+        return [JobToScore.model_validate(j) for j in data["jobs"]]
+
+    async def record_scores(self, scores: list[dict[str, Any]]) -> list[ScoreOutcome]:
+        data = await self._request("POST", "/jobs/scores", json={"scores": scores})
+        return [ScoreOutcome.model_validate(r) for r in data["results"]]
+
+    async def generation_context(self, job_id: str | None, cv_template: str | None) -> GenerationContext:
+        params = {k: v for k, v in (("job_id", job_id), ("cv_template", cv_template)) if v}
+        return GenerationContext.model_validate(await self._request("GET", "/generation/context", params=params))
+
+    async def create_draft(self, payload: dict[str, Any]) -> Draft:
+        # Compiling two documents with pdflatex takes longer than a read
+        data = await self._request("POST", "/drafts", json=payload, timeout=self._settings.generate_timeout_seconds)
+        return Draft.model_validate(data)
+
+    async def get_draft(self, draft_id: str) -> Draft:
+        return Draft.model_validate(await self._request("GET", f"/drafts/{quote(draft_id, safe='')}"))
+
+    async def commit_draft(self, draft_id: str) -> GenerateResult:
+        # Includes uploading the PDFs to Discord and logging to Notion
+        return GenerateResult.model_validate(await self._request(
+            "POST", f"/drafts/{quote(draft_id, safe='')}/commit", timeout=self._settings.generate_timeout_seconds))
+
+    async def get_job(self, job_id: str, clean: bool = False) -> JobDetail:
+        params = {"clean": "true"} if clean else None
+        return JobDetail.model_validate(await self._request("GET", f"/jobs/{quote(job_id, safe='')}", params=params))
 
     async def list_jobs(self, **filters: Any) -> list[JobSummary]:
         params = {k: v for k, v in filters.items() if v is not None}

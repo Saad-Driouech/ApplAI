@@ -1,10 +1,10 @@
 """
-Cover letter generator: calls the Anthropic API to produce tailored body text,
-fills in the LaTeX template with known fields, and compiles to PDF via pdflatex.
+Cover letter generator: gets tailored body text, fills in the LaTeX template with
+known fields, and compiles to PDF via pdflatex.
 
 Pipeline per job:
   1. Read base .tex template and profile_summary.md from disk (dynamic — always latest)
-  2. Call Anthropic API: system = rules + profile, user = job details
+  2. Body text: the Anthropic API (generate) or Claude through the MCP server (render only)
   3. Fill template placeholders programmatically (sender, recipient, date, body)
   4. Validate + compile in a sandbox via latex_safety.compile_tex()
   5. Return path to the generated PDF
@@ -26,13 +26,8 @@ from src.utils.sanitize import sanitize_company_for_path
 
 log = get_logger(__name__)
 
-_CL_SYSTEM_TEMPLATE = """\
-You are an expert cover letter writer for the candidate described below.
-Never fabricate qualifications or experiences not present in the profile.
-
-## Candidate Profile
-{profile}
-
+# Shared with Claude through the MCP server, so both writers follow the same rules
+CL_RULES = """\
 ## Cover Letter Rules
 - Write exactly 4 paragraphs plus a brief closing line.
 - Paragraph 1: Opening hook, why this company/role excites you.
@@ -54,6 +49,15 @@ Never fabricate qualifications or experiences not present in the profile.
 - Do not use filler phrases like "I believe", "I am confident that", "I would love to".
 - Write in a direct, natural tone. Short sentences are fine. Be specific, not generic.
 """
+
+_CL_SYSTEM_TEMPLATE = """\
+You are an expert cover letter writer for the candidate described below.
+Never fabricate qualifications or experiences not present in the profile.
+
+## Candidate Profile
+{profile}
+
+""" + CL_RULES
 
 _CL_USER_TEMPLATE = """\
 Write cover letter body paragraphs for this role:
@@ -128,12 +132,22 @@ class CoverLetterGenerator:
 
     def generate(self, job: dict, gemini_reasoning: str = "", output_folder: Path | None = None) -> Path:
         """
-        Generate a tailored PDF cover letter for *job*.
+        Write the cover letter body for *job* with the document LLM, then render it.
 
         Returns the path to the compiled .pdf file.
         Raises CoverLetterError on failure.
         """
-        body_text = self._generate_body(job, gemini_reasoning)
+        return self.render(self._generate_body(job, gemini_reasoning), job, output_folder)
+
+    def render(self, body_text: str, job: dict, output_folder: Path | None = None) -> Path:
+        """
+        Fill the template with *body_text* (from the LLM or from Claude) and compile it.
+
+        Returns the path to the compiled .pdf file.
+        Raises CoverLetterError on failure.
+        """
+        if not body_text.strip():
+            raise CoverLetterError("Cover letter body is empty")
         tex_source = self._fill_template(body_text, job)
 
         job_folder = output_folder or self._job_folder(job)

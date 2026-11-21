@@ -1,8 +1,10 @@
 # ApplAI MCP Server
 
-An [MCP](https://modelcontextprotocol.io) server that lets Claude Desktop (or any MCP client) work with ApplAI and with the application folders in `job_applications/`. It can score a posting against your profile, check whether you've already applied, list and summarise applications across the pipeline database and your folders, generate a tailored CV and cover letter, and run pipeline phases. Two prompts combine it with the claude.ai Gmail and Google Calendar connectors and web search for interview prep and status checks.
+An [MCP](https://modelcontextprotocol.io) server that lets Claude Desktop (or any MCP client) work with ApplAI and with the application folders in `job_applications/`.
 
-It's a thin layer on top of ApplAI. Every pipeline action goes through the ApplAI HTTP API (`X-API-Key`). The server never opens the SQLite database, and it only reads `job_applications/`.
+**Claude does the LLM work, ApplAI does the rest.** Claude scores postings and scraped jobs with the same rubric as the pipeline's scorer, and writes the tailored CV (LaTeX) and cover letter. ApplAI scrapes job boards, stores and deduplicates jobs, compiles the documents with its sandboxed pdflatex, and delivers them to Discord for approval and to Notion. The server also checks whether you've already applied, lists and summarises applications across the pipeline database and your folders, and runs pipeline phases. Prompts cover applying to a job, the daily batch, and interview prep and status checks with the claude.ai Gmail and Google Calendar connectors and web search.
+
+It's a thin layer on top of ApplAI. Every pipeline action goes through the ApplAI HTTP API (`X-API-Key`). The server never opens the SQLite database, and it only reads `job_applications/`. ApplAI needs no LLM keys for this flow.
 
 ```
 Claude Desktop ──stdio──▶ applai-mcp ──HTTP + X-API-Key──▶ ApplAI FastAPI (Docker) ──▶ SQLite, LLMs, Discord, Notion
@@ -14,12 +16,16 @@ Claude Desktop ──stdio──▶ applai-mcp ──HTTP + X-API-Key──▶ A
 
 | Tool | Kind | What it does |
 |---|---|---|
-| `score_job` | read | Scores pasted JD text or a public https URL from 0 to 10. It reports gaps, must-haves, whether the pipeline's keyword filter would keep it, pipeline duplicates and your existing folders for the company. Nothing is stored. |
+| `get_scoring_context` | read | For pasted JD text, a public https URL or a pipeline `job_id`: the sanitized posting, the scoring rubric, your profile, learned preferences and the threshold, plus whether the pipeline's keyword and title filters would keep it, pipeline duplicates and your existing folders for the company. Claude scores from this. Nothing is stored. |
+| `list_jobs_to_score` | write | Runs the pipeline's free pre-filters (expiry, location, title, keywords), then returns up to 30 scraped jobs waiting for a score, with the rubric and profile once. |
+| `record_scores` | write | Stores up to 30 of Claude's scores. Jobs at or above the threshold become `queued`, the rest `skipped` (`low_score` or `not_a_job`). Only `new` jobs are updated. |
+| `get_generation_context` | read | The LaTeX CV template and its page limit (the CV may not be longer than the compiled template), the CV and cover letter rules (style bans, no fabrication) and your profile, plus the job when a `job_id` is given. |
+| `draft_application` | write | Compiles Claude's CV LaTeX and cover letter body into `.pending/<draft_id>/` and reports page counts and problems to fix. Takes an existing `job_id` or a new posting (with Claude's score). Nothing is registered or sent. |
+| `generate_application` | **write**, gated | Turns a checked draft into an application (creating the job record for a new posting) and sends **only that application** to Discord for your approve/reject decision, logging it in Notion. It reports the folder that approving files it into. If delivery fails, the application stays `ready` for the next `deliver` run. |
 | `check_duplicate` | read | Exact match in the pipeline (company + title, normalised the same way as ApplAI's dedup key), plus a fuzzy match against your application folders. |
 | `list_applications` | read | Merges pipeline jobs and application folders, newest first. A folder that belongs to a pipeline job shows up once, as `source: "both"`. Filters: status, stage, country, company, since. |
 | `get_stats` | read | Pipeline counts, approval rate and threshold advice from past decisions, folders by stage and country, and recent activity. |
-| `generate_application` | **write**, gated | Generates a CV and cover letter for an existing `job_id` or a new posting, into `.pending/`. The next `deliver` run posts it to Discord for approval, the same as any pipeline job. |
-| `run_pipeline_phase` | **write**, gated | Starts `scrape`, `score`, `generate` or `deliver` in the background and returns a `run_id` straight away. |
+| `run_pipeline_phase` | **write**, gated | Starts `scrape` or `deliver` in the background and returns a `run_id` straight away. `score` and `generate` use ApplAI's own LLM and only work when it has an API key. |
 | `get_pipeline_run` | read | Status and result of the runs started in this session. |
 | `get_application` | read | Everything about one application: matching folders with JD text and your `.md` prep notes, pipeline jobs with score reasoning and description, and ready-made Gmail and Calendar search queries. |
 
@@ -30,9 +36,16 @@ Folder stages:
 
 The read tools that don't score still work while the API is down. They return folder data plus a `warnings` entry.
 
-## Prompts: Gmail, Calendar and web search
+## Prompts
 
-Email and calendar access comes from the **claude.ai Gmail and Google Calendar connectors** in the client, not from this server. The server never holds Google credentials. Two prompts (in Claude Desktop: **+ → applai**, or by name) give Claude the steps:
+In Claude Desktop, use **+ → applai**, or ask for a prompt by name.
+
+| Prompt | Arguments | What Claude does |
+|---|---|---|
+| `apply_to_job` | `posting` (JD text or https URL) | Calls `get_scoring_context` and scores the job. It shows you the score, gaps, duplicates and existing folders, and **waits for your yes**. Then it calls `get_generation_context`, writes the CV and cover letter, and runs `draft_application` until the draft has no problems. Then it calls `generate_application`, which goes through the confirmation gate and sends the application to Discord. |
+| `daily_run` | `max_scores?` (30), `max_documents?` (5) | Scrape, `list_jobs_to_score` → score → `record_scores`, then write and generate documents for the best queued jobs (each goes to Discord) and report counts. Invoking it approves the confirmations it needs. |
+
+Email and calendar access comes from the **claude.ai Gmail and Google Calendar connectors** in the client, not from this server. The server never holds Google credentials. Two prompts give Claude the steps:
 
 | Prompt | Arguments | What Claude does |
 |---|---|---|
@@ -50,11 +63,14 @@ Both prompts tell Claude to stay read-only (no sending, drafting or calendar cha
   - It's valid for 10 minutes and can be used once.
   - Only a repeat call with identical arguments and the token runs. Changed arguments, an expired token, a reused token or a token from a previous server process are all rejected.
   - This mode guarantees the preview round-trip. The human approval still comes from the client's own tool-approval prompt.
-- **Previews check before anything is spent.** A known duplicate, a job that already has documents, or a missing country fails at preview time.
+- **`CONFIRMATION_MODE=token`** forces the token flow even when the client advertises elicitation. Use it for unattended runs, such as a scheduled task, where no one can answer an elicitation. Each gated call logs the client name, whether it advertised elicitation, and which path ran.
+- **Checks happen before the gate.** `draft_application` rejects a known duplicate, a job that already has documents, a missing country, an unscored job without a score, and unsafe or non-compiling LaTeX. The preview shows the draft's job, score, page counts and warnings. Committing re-checks for duplicates.
+
+**Claude-written documents.** The CV and cover letter rules come from ApplAI (`CV_RULES`, `CL_RULES`), the same text its own generator uses. The CV LaTeX goes through ApplAI's safety checks (no file I/O, file embedding such as `\pdfobj` or `\special`, shell escape or Lua) and is compiled in the same sandbox. The engine (pdfLaTeX or XeLaTeX) and the page limit come from the template, never from Claude's text. The cover letter body is inserted as escaped plain text, never as LaTeX.
 
 **Inputs and outputs.**
 - Every tool input and output is a Pydantic model with field descriptions.
-- Template names are validated identifiers and never paths.
+- Template names are validated identifiers and never paths. Draft ids are validated UUIDs, and scores must be between 0 and 10.
 - URLs must be `https`.
 - Tool annotations mark read-only and open-world tools.
 
@@ -141,7 +157,7 @@ Layout: `server.py` (factory), `state.py` (lifespan), `client.py` (API), `confir
 ## Limitations
 
 - **Process-local runs.** Run tracking lives in memory. If the MCP server restarts, a phase keeps running in ApplAI but `get_pipeline_run` forgets it.
-- **Extra scoring cost.** Previewing a new posting costs one scoring call, and generation scores it once more server-side.
+- **Claude usage.** Scoring and writing run on the client's Claude plan. Batches are capped (30 scores per `record_scores` call; `daily_run` defaults to 5 documents).
 - **Login-walled pages.** These can't be fetched; paste the text instead.
 - **DNS rebinding.** The URL guard checks resolved addresses before connecting, and the HTTP client resolves again afterwards. That gap is accepted because callers must hold the API key.
 - **Connector prompts.** The prompts depend on the client having the Gmail and Calendar connectors and web search. Without them, Claude says which source was unavailable.

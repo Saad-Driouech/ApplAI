@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 from pydantic import AnyHttpUrl, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -17,6 +18,8 @@ class Settings(BaseSettings):
     applai_applications_dir: Path = Field(description="Host path of the job_applications folder")
 
     request_timeout_seconds: float = Field(30.0, gt=0, description="Reads and single-job scoring")
-    generate_timeout_seconds: float = Field(600.0, gt=0, description="POST /jobs/generate (LLM + pdflatex)")
+    generate_timeout_seconds: float = Field(600.0, gt=0, description="POST /drafts (pdflatex)")
     phase_timeout_seconds: float = Field(3600.0, gt=0, description="Batch pipeline phases")
     confirmation_ttl_seconds: int = Field(600, gt=0, description="Lifetime of confirmation tokens and previews")
+    confirmation_mode: Literal["auto", "token"] = Field(
+        "auto", description="auto: elicit when the client supports it; token: always the two-step token flow")

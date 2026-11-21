@@ -40,6 +40,8 @@ def cfg(tmp_path):
     return SimpleNamespace(
         api_key="test-key",  # pragma: allowlist secret
         score_threshold=6.0,
+        scoring_llm_enabled=True,
+        documents_llm_enabled=True,
         paths=SimpleNamespace(db_path=tmp_path / "db" / "t.db", working_dir=tmp_path),
     )
 
@@ -143,6 +145,7 @@ class TestGenerate:
         row = _row(cfg, body["job_id"])
         assert (row["source"], row["status"], row["score"]) == ("mcp", "ready", 7.5)
         assert body["status"] == "ready" and body["score"] == 7.5
+        assert body["approved_dir"] == "germany/Acme"
         pending = cfg.paths.working_dir / ".pending" / body["application_id"]
         assert body["cv_path"] == str(pending / "cv.pdf")
         assert (pending / "cv.pdf").read_text() == "Strong LLM match"  # score reasoning feeds tailoring

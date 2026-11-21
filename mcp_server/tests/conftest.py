@@ -27,12 +27,23 @@ def job(**overrides: Any) -> dict:
     return {**base, **overrides}
 
 
-def score_response(**overrides: Any) -> dict:
-    base = {"score": 7.5, "threshold": 6.0, "reasoning": "Strong LLM match", "must_haves_met": ["Python"],
-            "gaps": ["Go"], "is_job_posting": True, "passes_keyword_filter": True, "passes_title_filter": True,
-            "job": {"title": "AI Engineer", "company": "Acme", "country": "DE", "city": "",
+def resolve_response(**overrides: Any) -> dict:
+    base = {"job": {"title": "AI Engineer", "company": "Acme", "country": "DE", "city": "",
                     "source_url": "", "description_chars": len(JD)},
+            "description": JD, "location": "DE", "passes_keyword_filter": True, "passes_title_filter": True,
             "duplicates": [], "sanitizer_flags": []}
+    return {**base, **overrides}
+
+
+SCORING_CONTEXT = {"rubric": "## Scoring Rubric\n  9-10: ...", "profile": "Profile: LLM agents",
+                   "learned_preferences": "", "threshold": 6.0, "target_countries": ["DE", "NL"]}
+DRAFT_ID = "0b6c2a1e-5f3d-4c8b-9a7e-1d2f3a4b5c6d"
+
+
+def draft(**overrides: Any) -> dict:
+    base = {"draft_id": DRAFT_ID, "job_id": "j1", "title": "AI Engineer", "company": "Acme", "country": "DE",
+            "city": "Berlin", "score": 8.0, "score_reasoning": "good", "cv_template": "default", "cv_pages": 1,
+            "cover_letter_pages": 1, "warnings": [], "committed": False}
     return {**base, **overrides}
 
 
@@ -46,7 +57,8 @@ class FakeApi:
                               "recommended_threshold": 6.5, "recommendation": "Raise slightly"},
             "GET /jobs": {"count": 0, "jobs": []},
             "GET /jobs/duplicates": {"dedup_key": "acme|ai engineer", "matches": []},
-            "POST /jobs/score": score_response(),
+            "POST /jobs/resolve": resolve_response(),
+            "GET /scoring/context": SCORING_CONTEXT,
         }
         self.requests: list[httpx2.Request] = []
 

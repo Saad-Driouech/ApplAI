@@ -6,7 +6,7 @@ from typing import Any
 import httpx2
 from mcp.server.mcpserver.exceptions import ToolError
 
-_MAX_DETAIL = 500
+_MAX_DETAIL = 2000  # room for a pdflatex error excerpt from a failed draft
 
 
 class ApplAIError(ToolError):

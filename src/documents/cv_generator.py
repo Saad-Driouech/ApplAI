@@ -1,10 +1,10 @@
 """
-CV generator: calls the Anthropic API to tailor the LaTeX CV template,
-then compiles it to PDF via pdflatex.
+CV generator: tailors the LaTeX CV template for a job, then compiles it to PDF with pdflatex
+(or xelatex when the template asks for it).
 
 Pipeline per job:
   1. Read base .tex template and profile_summary.md from disk (dynamic — always latest)
-  2. Call Anthropic API: system = rules + profile + CV template, user = job details
+  2. Tailor it: the Anthropic API (generate) or Claude through the MCP server (render only)
   3. Validate + compile in a sandbox via latex_safety.compile_tex()
   4. Return path to the generated PDF
 """
@@ -12,24 +12,28 @@ from __future__ import annotations
 
 import re
 import shutil
+import subprocess
+import tempfile
 import uuid
 from pathlib import Path
 from typing import Optional
 
 from src.logger import audit, get_logger
-from src.utils.latex_safety import LatexCompileError, UnsafeLatexError, compile_tex
+from src.utils.latex_safety import LatexCompileError, UnsafeLatexError, compile_tex, page_count, template_engine
 
 log = get_logger(__name__)
 
-_CV_SYSTEM_TEMPLATE = """\
-You are a professional CV editor. Tailor the LaTeX CV for a target job.
+# Template page counts by (path, mtime), so a template is compiled once per change
+_TEMPLATE_PAGES: dict[tuple[str, int], Optional[int]] = {}
 
+# Shared with Claude through the MCP server, so both writers follow the same rules
+CV_RULES = """\
 ## Rules
 - Keep the LaTeX structure intact; only modify text content.
-- Do NOT add \\write18, \\input, \\include, \\openin, \\openout, or any file I/O commands.
-- The CV MUST fit on exactly ONE page. This is a hard constraint.
+- Do NOT add \\write18, \\input, \\include, \\openin, \\openout, \\special, \\pdfobj, or any file I/O commands.
+- The CV must NOT have more pages than the base CV below. This is a hard constraint.
 - Keep ALL sections. Do not remove any section. Instead make each bullet point shorter and more concise.
-- Each bullet point should be one line maximum. Cut filler words, keep only the metric or outcome.
+- Keep bullet points concise. Cut filler words, keep only the metric or outcome.
 - Emphasise experience and skills most relevant to the job description.
 - Reorder bullet points within each role to put the most relevant ones first.
 - Return ONLY the modified .tex source, no explanations, no markdown fences.
@@ -37,11 +41,17 @@ You are a professional CV editor. Tailor the LaTeX CV for a target job.
 - Only use information present in the CV source below.
 
 ## Writing Style (STRICT)
-- NEVER use em dashes or en dashes. Use commas, periods, or semicolons instead.
+- NEVER use em dashes or en dashes in text. Use commas, periods, or semicolons instead.
+  Exception: keep the template's `--` in date ranges (e.g. 03/2025 -- 09/2026).
 - NEVER use "leverage", "spearheaded", "passionate", "drove", "synergy", "cutting-edge", "orchestrated", or similar AI cliches.
 - Use direct, plain language. "Built X that did Y" is better than "Spearheaded the development of X".
 - Keep bullet points factual: action verb + what + measurable result. No filler.
+"""
 
+_CV_SYSTEM_TEMPLATE = """\
+You are a professional CV editor. Tailor the LaTeX CV for a target job.
+
+""" + CV_RULES + """
 ## Candidate Profile & Strategy
 {profile}
 
@@ -50,8 +60,8 @@ You are a professional CV editor. Tailor the LaTeX CV for a target job.
 """
 
 _CV_USER_TEMPLATE = """\
-Tailor this CV for the following role. The result MUST fit on one page — \
-keep all sections but write concise, single-line bullet points.
+Tailor this CV for the following role. The result must not have more pages than the base CV; \
+keep all sections but write concise bullet points.
 
 Title: {title}
 Company: {company}
@@ -75,10 +85,10 @@ def _strip_fences(text: str) -> str:
 
 class CVGenerator:
     """
-    Generates a tailored PDF CV for a specific job via the Anthropic API.
+    Generates a tailored PDF CV for a specific job, written by the Anthropic API or by Claude.
 
     Args:
-        template_path: Path to the base .tex CV file.
+        template_path: Path to the base .tex CV file. A '% !TEX program = xelatex' line selects XeLaTeX.
         output_dir:    Directory where per-job folders will be created.
         profile_path:  Path to profile_summary.md — read fresh on every call.
         pdflatex_bin:  Path to the pdflatex binary.
@@ -101,29 +111,61 @@ class CVGenerator:
 
     def generate(self, job: dict, gemini_reasoning: str = "", output_folder: Path | None = None) -> Path:
         """
-        Generate a tailored PDF CV for *job*.
+        Tailor the CV for *job* with the document LLM, then render it.
 
         Returns the path to the compiled .pdf file.
         Raises CVGenerationError on any failure.
         """
+        return self.render(self._tailor_with_api(job, gemini_reasoning), job, output_folder)
+
+    def render(self, tex_source: str, job: dict, output_folder: Path | None = None) -> Path:
+        """
+        Compile an already tailored CV (from the LLM or from Claude) into *output_folder*.
+
+        Returns the path to the compiled .pdf file.
+        Raises CVGenerationError on any failure.
+        """
+        tex_source = _strip_fences(tex_source)
+        if "\\documentclass" not in tex_source or "\\end{document}" not in tex_source:
+            raise CVGenerationError("CV source is not a complete LaTeX document")
+
         job_folder = output_folder or self._job_folder(job)
         job_folder.mkdir(parents=True, exist_ok=True)
-
-        tex_source = self._tailor_with_api(job, gemini_reasoning)
         tex_path = job_folder / "cv.tex"
         tex_path.write_text(tex_source, encoding="utf-8")
         self._copy_template_assets(job_folder)
 
         try:
-            pdf_path = compile_tex(tex_path, pdflatex_bin=self._pdflatex)
+            pdf_path = compile_tex(tex_path, pdflatex_bin=self._engine())
         except UnsafeLatexError as exc:
-            log.error("API output failed LaTeX safety check for job %s: %s", job.get("id", "?"), exc)
+            log.error("CV source failed LaTeX safety check for job %s: %s", job.get("id", "?"), exc)
             raise CVGenerationError(str(exc)) from exc
         except LatexCompileError as exc:
             raise CVGenerationError(str(exc)) from exc
         audit("cv_generated", job_id=job.get("id", "?"), pdf_path=str(pdf_path))
         log.info("CV generated: %s", pdf_path)
         return pdf_path
+
+    def template_pages(self) -> Optional[int]:
+        """Pages of the compiled base template, the limit for tailored CVs; None if it cannot be compiled."""
+        key = (str(self._template), self._template.stat().st_mtime_ns)
+        if key not in _TEMPLATE_PAGES:
+            with tempfile.TemporaryDirectory() as tmp:
+                work = Path(tmp)
+                self._copy_template_assets(work)
+                tex_path = work / "template.tex"
+                shutil.copy2(self._template, tex_path)
+                try:
+                    _TEMPLATE_PAGES[key] = page_count(compile_tex(tex_path, pdflatex_bin=self._engine()))
+                except (UnsafeLatexError, LatexCompileError, subprocess.TimeoutExpired) as exc:
+                    log.warning("CV template %s could not be compiled: %s", self._template, exc)
+                    _TEMPLATE_PAGES[key] = None
+        return _TEMPLATE_PAGES[key]
+
+    def _engine(self) -> str:
+        """The engine the template asks for; generated text never chooses it."""
+        engine = template_engine(self._template.read_text(encoding="utf-8"))
+        return self._pdflatex if engine == "pdflatex" else engine
 
     def _tailor_with_api(self, job: dict, reasoning: str) -> str:
         from src import claude_bridge

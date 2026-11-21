@@ -1,4 +1,4 @@
-"""Write/outbound tools behind the confirmation gate, plus run tracking."""
+"""Document tools (Claude writes, ApplAI renders) and pipeline phases; writes go through the confirmation gate."""
 from __future__ import annotations
 
 from typing import Annotated, Literal, Optional
@@ -14,100 +14,85 @@ from applai_mcp.models import (
     Company,
     ConfirmationToken,
     Country,
+    CvTemplate,
+    DraftId,
+    DraftResult,
     Gated,
     GenerateResult,
+    GenerationGuide,
     JdText,
     JobId,
     JobUrl,
     PipelineRun,
     PipelineRunList,
     Preview,
+    ScoreInput,
     Title,
 )
 from applai_mcp.state import AppState, state
 from applai_mcp.tools.scoring import READ_ONLY, job_payload
 
 Phase = Literal["scrape", "score", "generate", "deliver"]
-CvTemplate = Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{1,50}$",
-                                  description="Named CV template from APPLAI_CV_TEMPLATES, e.g. '1page'")]
+CvTex = Annotated[str, Field(min_length=100, max_length=100_000,
+                             description="Complete tailored CV LaTeX source, from \\documentclass to \\end{document}")]
+CoverLetterBody = Annotated[str, Field(
+    min_length=200, max_length=10_000,
+    description="Cover letter body as plain text: paragraphs separated by blank lines, no salutation or sign-off")]
 
 GENERATE_TOOL = "generate_application"
 PHASE_TOOL = "run_pipeline_phase"
-DONE_STATUSES = {"generating", "ready", "delivered", "approved", "rejected"}
 WRITE = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=True)
+# Writes files into .pending/ only; nothing is registered or sent
+DRAFT = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=False)
 
 PHASE_EFFECTS = {
     "scrape": ["Query the job boards (Arbeitnow, EnglishJobs.de, Remotive, RemoteOK, Adzuna if configured)",
                "Insert newly found jobs into the ApplAI database"],
     "score": ["Mark jobs older than JOB_MAX_AGE_DAYS as expired",
-              "Score a batch of 'new' jobs with the Tier-1 LLM (uses daily API quota)"],
-    "generate": ["Generate a tailored CV and cover letter for each queued job with the Claude API "
-                 "(about $0.02-0.05 per job)", "Write the PDFs into .pending/ for review"],
+              "Score a batch of 'new' jobs with ApplAI's own LLM (fails unless an LLM key is configured; "
+              "normally you score them with list_jobs_to_score and record_scores)"],
+    "generate": ["Generate a CV and cover letter for each queued job with ApplAI's own LLM (fails unless an LLM "
+                 "key is configured; normally you write them with draft_application)",
+                 "Write the PDFs into .pending/ for review"],
     "deliver": ["Post up to 10 ready bundles to Discord for approval",
                 "Log each delivered job to the Notion tracker"],
 }
 PHASE_BACKLOG = {"score": "new", "generate": "queued", "deliver": "ready"}
 
 
-async def _generate_preview(s: AppState, args: dict) -> Preview:
-    details: dict = {}
-    effects = []
-    if args["job_id"]:
-        job = await s.api.get_job(args["job_id"])
-        if job.status in DONE_STATUSES:
-            raise ToolError(f"Job {job.id} already has documents (status '{job.status}')")
-        title, company, country = job.title, job.company, job.country
-        details["Score"] = f"{job.score}/10" if job.score is not None else "not scored yet (will be scored first)"
-    else:
-        payload = job_payload(args["jd_text"], args["url"], args["title"], args["company"], args["country"],
-                              args["city"])
-        result = await s.api.score_job(payload)
-        title, company, country = result.job.title, result.job.company, result.job.country
-        missing = [name for name, value in (("title", title), ("company", company), ("country", country))
-                   if not value]
-        if missing:
-            raise ToolError(f"Could not determine {', '.join(missing)} from the posting; pass them explicitly")
-        if result.duplicates:
-            dup = result.duplicates[0]
-            raise ToolError(f"This job already exists in the pipeline as job_id {dup.id} (status '{dup.status}'); "
-                            "call generate_application with that job_id instead")
-        effects.append("Create a pipeline job record for this posting (source 'mcp')")
-        details["Score"] = f"{result.score}/10 (pipeline threshold {result.threshold})"
-        if result.gaps:
-            details["Gaps"] = "; ".join(result.gaps[:5])
+def _allow_elicitation(s: AppState) -> bool:
+    return s.settings.confirmation_mode == "auto"
 
+
+async def _generate_preview(s: AppState, draft_id: str) -> Preview:
+    draft = await s.api.get_draft(draft_id)
+    if draft.committed:
+        raise ToolError(f"Draft {draft_id} was already used; write a new draft to generate again")
+
+    effects = ["Create the pipeline job record for this posting (source 'mcp')"] if draft.job_id is None else []
     effects += [
-        "Call the Claude API to tailor a CV and cover letter (about $0.02-0.05)",
-        "Compile both PDFs into .pending/<application_id>/ (nothing is sent yet)",
-        "Leave it 'ready' for the next deliver run, which posts it to Discord for your approval",
+        f"Register the draft's PDFs in .pending/{draft_id}/ as an application",
+        "Post it to Discord for your approve/reject decision and log it in Notion",
     ]
-    folders = await anyio.to_thread.run_sync(s.fs.find, company, title)
-    details = {"Job": f"{title} at {company} ({country})", **details,
-               "CV template": args["cv_template"] or "default"}
+    details = {
+        "Job": f"{draft.title} at {draft.company} ({draft.country})",
+        "Score": f"{draft.score}/10" if draft.score is not None else "unknown",
+        "Pages": f"CV {draft.cv_pages} (limit {draft.cv_max_pages}), cover letter {draft.cover_letter_pages}",
+        "CV template": draft.cv_template,
+    }
+    if draft.warnings:
+        details["Warnings"] = "; ".join(draft.warnings)
+    folders = await anyio.to_thread.run_sync(s.fs.find, draft.company, draft.title)
     if folders:
         details["Existing folders"] = ", ".join(m.application.path for m in folders[:3])
-    return Preview(action=f"Generate an application for {title} at {company}", side_effects=effects, details=details)
+    return Preview(action=f"Generate an application for {draft.title} at {draft.company}",
+                   side_effects=effects, details=details)
 
 
-async def _approve_generate(
-    ctx: Context,
-    jd_text: Optional[str] = None,
-    url: Optional[str] = None,
-    job_id: Optional[str] = None,
-    title: Optional[str] = None,
-    company: Optional[str] = None,
-    country: Optional[str] = None,
-    city: Optional[str] = None,
-    cv_template: Optional[str] = None,
-    confirmation_token: Optional[str] = None,
-):
-    if sum(bool(v) for v in (jd_text, url, job_id)) != 1:
-        raise ToolError("Provide exactly one of jd_text, url or job_id")
+async def _approve_generate(ctx: Context, draft_id: str, confirmation_token: Optional[str] = None):
     s = state(ctx)
-    args = {"jd_text": jd_text, "url": url, "job_id": job_id, "title": title, "company": company,
-            "country": country.upper() if country else None, "city": city, "cv_template": cv_template}
-    return await request_approval(ctx, s.tokens, s.previews, GENERATE_TOOL, args, confirmation_token,
-                                  lambda: _generate_preview(s, args))
+    return await request_approval(ctx, s.tokens, s.previews, GENERATE_TOOL, {"draft_id": draft_id},
+                                  confirmation_token, lambda: _generate_preview(s, draft_id), _allow_elicitation(s))
 
 
 async def _phase_preview(s: AppState, phase: str) -> Preview:
@@ -121,40 +106,87 @@ async def _phase_preview(s: AppState, phase: str) -> Preview:
 async def _approve_phase(ctx: Context, phase: str, confirmation_token: Optional[str] = None):
     s = state(ctx)
     return await request_approval(ctx, s.tokens, s.previews, PHASE_TOOL, {"phase": phase}, confirmation_token,
-                                  lambda: _phase_preview(s, phase))
+                                  lambda: _phase_preview(s, phase), _allow_elicitation(s))
+
+
+def _draft_next_step(warnings: list[str]) -> str:
+    if warnings:
+        return ("Fix these problems and call draft_application again with the corrected content: "
+                + "; ".join(warnings))
+    return ("Show the user the job, score and page counts. Only after they approve, call generate_application "
+            "with this draft_id.")
 
 
 def register(server: MCPServer) -> None:
-    @server.tool(name=GENERATE_TOOL, annotations=WRITE)
-    async def generate_application(
+    @server.tool(annotations=READ_ONLY)
+    async def get_generation_context(
         ctx: Context,
-        approval: Annotated[ElicitationResult[Approval], Resolve(_approve_generate)],
+        job_id: Optional[JobId] = None,
+        cv_template: Optional[CvTemplate] = None,
+    ) -> GenerationGuide:
+        """
+        What you need to write a tailored CV and cover letter: the LaTeX CV template, the CV and cover
+        letter rules, and the candidate profile. Pass job_id for a pipeline job (its description is
+        included); for a pasted posting, use the description from get_scoring_context.
+        """
+        context = await state(ctx).api.generation_context(job_id, cv_template)
+        return GenerationGuide(**context.model_dump())
+
+    @server.tool(annotations=DRAFT)
+    async def draft_application(
+        ctx: Context,
+        cv_tex: CvTex,
+        cover_letter_body: CoverLetterBody,
+        job_id: Optional[JobId] = None,
         jd_text: Optional[JdText] = None,
         url: Optional[JobUrl] = None,
-        job_id: Optional[JobId] = None,
         title: Optional[Title] = None,
         company: Optional[Company] = None,
         country: Optional[Country] = None,
         city: Optional[str] = None,
+        score: Optional[ScoreInput] = None,
         cv_template: Optional[CvTemplate] = None,
-        confirmation_token: Optional[ConfirmationToken] = None,
-    ) -> Gated[GenerateResult]:
+    ) -> DraftResult:
         """
-        Generate a tailored CV and cover letter for one job (requires user confirmation).
-        Give an existing job_id, or a new job as jd_text or url (title, company and country are
-        needed, either passed or found on the page). Documents go to .pending/ and are delivered to
-        Discord for approval by the next 'deliver' phase. The first call returns a preview; see its message.
+        Compile your tailored CV LaTeX and cover letter body into PDFs as a draft, and report page counts
+        and problems to fix. Give an existing job_id, or a new posting as jd_text or url (title, company
+        and country are required, either passed or found on the page). Pass score when the job has none
+        yet (always for a new posting). Nothing is registered or sent until generate_application.
         """
-        if (blocked := unapproved(approval)) is not None:
-            return blocked
-        s = state(ctx)
-        payload: dict = {"cv_template": cv_template}
+        if sum(bool(v) for v in (jd_text, url, job_id)) != 1:
+            raise ToolError("Provide exactly one of jd_text, url or job_id")
+        payload: dict = {"cv_tex": cv_tex, "cover_letter_body": cover_letter_body, "cv_template": cv_template,
+                         "score": score.model_dump() if score else None}
         if job_id:
             payload["job_id"] = job_id
         else:
             payload["job"] = job_payload(jd_text, url, title, company, country, city)
-        result = GenerateResult.model_validate(await s.api.generate_job(payload))
-        return Gated(status="done", message=f"Documents generated for job {result.job_id}.", result=result)
+        draft = await state(ctx).api.create_draft(payload)
+        return DraftResult(draft=draft, next_step=_draft_next_step(draft.warnings))
+
+    @server.tool(name=GENERATE_TOOL, annotations=WRITE)
+    async def generate_application(
+        ctx: Context,
+        draft_id: DraftId,
+        approval: Annotated[ElicitationResult[Approval], Resolve(_approve_generate)],
+        confirmation_token: Optional[ConfirmationToken] = None,
+    ) -> Gated[GenerateResult]:
+        """
+        Turn a checked draft from draft_application into an application and send it to Discord for the
+        user's approve/reject decision, logging it in Notion (requires user confirmation). Only this
+        application is sent. The first call returns a preview; see its message.
+        """
+        if (blocked := unapproved(approval)) is not None:
+            return blocked
+        result = await state(ctx).api.commit_draft(draft_id)
+        if result.delivery_error:
+            message = (f"Application created for job {result.job_id} but not sent yet: {result.delivery_error}. "
+                       "run_pipeline_phase('deliver') sends it.")
+        else:
+            message = f"Application for job {result.job_id} sent to Discord for your approval."
+        if result.approved_dir:
+            message += f" Approving it moves the files into job_applications/{result.approved_dir}/."
+        return Gated(status="done", message=message, result=result)
 
     @server.tool(name=PHASE_TOOL, annotations=WRITE)
     async def run_pipeline_phase(
@@ -165,8 +197,8 @@ def register(server: MCPServer) -> None:
     ) -> Gated[PipelineRun]:
         """
         Start an ApplAI pipeline phase in the background (requires user confirmation): scrape job
-        boards, score new jobs, generate documents for queued jobs, or deliver ready bundles to
-        Discord/Notion. Returns a run_id immediately; poll get_pipeline_run for the result.
+        boards or deliver ready bundles to Discord/Notion. 'score' and 'generate' use ApplAI's own LLM
+        and only work when it has an API key. Returns a run_id immediately; poll get_pipeline_run.
         """
         if (blocked := unapproved(approval)) is not None:
             return blocked
