@@ -30,6 +30,8 @@ packages = ["applai_mcp"]
 [tool.uv]
 # Supply-chain guard: ignore releases newer than this date (bump deliberately)
 exclude-newer = "2026-10-16T00:00:00Z"
+# Security fixes released after that date (CVE-2026-126360)
+exclude-newer-package = { opentelemetry-api = "2026-10-30T00:00:00Z" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
