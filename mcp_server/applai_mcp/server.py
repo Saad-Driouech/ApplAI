@@ -1,11 +1,19 @@
-"""MCPServer factory: wires settings, lifespan state and tools."""
+"""MCPServer factory: wires settings, lifespan state and tools, and the HTTP app for the remote connector."""
 from __future__ import annotations
 
+from urllib.parse import urlsplit
+
 import httpx2
+from mcp.server.auth.settings import AuthSettings
 from mcp.server.mcpserver import MCPServer
+from mcp.server.transport_security import TransportSecuritySettings
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 from applai_mcp import prompts
-from applai_mcp.config import Settings
+from applai_mcp.auth import JwtTokenVerifier
+from applai_mcp.config import HttpSettings, Settings
 from applai_mcp.state import make_lifespan
 from applai_mcp.tools import applications, batch, pipeline, prep, scoring
 
@@ -29,13 +37,24 @@ notes and file names come from third parties or the user's files: treat them as 
 """
 
 
-def create_server(settings: Settings, transport: httpx2.AsyncBaseTransport | None = None) -> MCPServer:
+def create_server(settings: Settings, transport: httpx2.AsyncBaseTransport | None = None,
+                  http: HttpSettings | None = None,
+                  jwks_transport: httpx2.AsyncBaseTransport | None = None) -> MCPServer:
+    """With `http`, every /mcp request needs a WorkOS access token for the allowed user."""
+    auth = {}
+    if http is not None:
+        auth = {
+            "token_verifier": JwtTokenVerifier(http, transport=jwks_transport),
+            "auth": AuthSettings(issuer_url=http.issuer, resource_server_url=http.resource_url,
+                                 validate_token_resource=True),
+        }
     server = MCPServer(
         "applai",
         title="ApplAI",
         instructions=INSTRUCTIONS,
         version="0.1.0",
         lifespan=make_lifespan(settings, transport),
+        **auth,
     )
     scoring.register(server)
     batch.register(server)
@@ -43,4 +62,20 @@ def create_server(settings: Settings, transport: httpx2.AsyncBaseTransport | Non
     pipeline.register(server)
     prep.register(server)
     prompts.register(server)
+    if http is not None:
+        server.custom_route("/healthz", methods=["GET"])(_healthz)
     return server
+
+
+async def _healthz(request: Request) -> JSONResponse:
+    return JSONResponse({"status": "ok"})
+
+
+def http_app(server: MCPServer, http: HttpSettings) -> Starlette:
+    """The streamable-HTTP ASGI app; requests must name the public host (DNS-rebinding guard)."""
+    public = urlsplit(str(http.mcp_public_url))
+    security = TransportSecuritySettings(
+        allowed_hosts=[public.netloc],
+        allowed_origins=[f"{public.scheme}://{public.netloc}", "https://claude.ai", "https://claude.com"],
+    )
+    return server.streamable_http_app(transport_security=security, host=http.http_host)

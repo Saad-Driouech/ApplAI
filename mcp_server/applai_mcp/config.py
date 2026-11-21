@@ -23,3 +23,24 @@ class Settings(BaseSettings):
     confirmation_ttl_seconds: int = Field(600, gt=0, description="Lifetime of confirmation tokens and previews")
     confirmation_mode: Literal["auto", "token"] = Field(
         "auto", description="auto: elicit when the client supports it; token: always the two-step token flow")
+
+
+class HttpSettings(BaseSettings):
+    """Remote-connector settings, loaded only with --transport http."""
+    model_config = SettingsConfigDict(env_file=ENV_FILE, env_file_encoding="utf-8", extra="ignore")
+
+    mcp_public_url: AnyHttpUrl = Field(description="Public origin of this server, e.g. https://mcp.example.com")
+    authkit_issuer: AnyHttpUrl = Field(description="WorkOS AuthKit issuer, e.g. https://<subdomain>.authkit.app")
+    allowed_user_id: str = Field(min_length=1, description="The only WorkOS user ('sub') allowed in")
+    jwks_cache_seconds: int = Field(3600, gt=0, description="How long signing keys are cached")
+    http_host: str = Field("127.0.0.1", description="Bind address")
+    http_port: int = Field(8080, gt=0, lt=65536, description="Bind port")
+
+    @property
+    def issuer(self) -> str:
+        return str(self.authkit_issuer).rstrip("/")
+
+    @property
+    def resource_url(self) -> str:
+        """The MCP endpoint: the OAuth resource and the expected token audience."""
+        return str(self.mcp_public_url).rstrip("/") + "/mcp"

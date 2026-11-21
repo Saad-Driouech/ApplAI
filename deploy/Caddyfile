@@ -1,0 +1,43 @@
+# Public edge of the remote host: TLS (Let's Encrypt) for the MCP connector and the Discord webhook.
+# Everything else (SSH, Syncthing, the ApplAI API) is reachable over the tailnet only.
+
+(security_headers) {
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+		-Server
+	}
+}
+
+mcp.saaddriouech.com {
+	import security_headers
+
+	# MCP_ALLOWED_CIDRS defaults to everyone. Set it to Anthropic's range (160.79.104.0/21) in applai/.env
+	# once the connector works, then `docker compose ... up -d caddy`. Discovery and /healthz stay open.
+	@outside {
+		path /mcp /mcp/*
+		not remote_ip {$MCP_ALLOWED_CIDRS:0.0.0.0/0 ::/0}
+	}
+	respond @outside 403
+
+	reverse_proxy mcp:8080 {
+		flush_interval -1
+	}
+}
+
+hooks.saaddriouech.com {
+	import security_headers
+
+	# Discord's interactions webhook only (Ed25519-verified by ApplAI); every other path is 404
+	@discord {
+		method POST
+		path /discord/interactions
+	}
+	handle @discord {
+		reverse_proxy applai-api:8000
+	}
+	handle {
+		respond 404
+	}
+}

@@ -1,15 +1,16 @@
 # ApplAI MCP Server
 
-An [MCP](https://modelcontextprotocol.io) server that lets Claude Desktop (or any MCP client) work with ApplAI and with the application folders in `job_applications/`.
+An [MCP](https://modelcontextprotocol.io) server that lets Claude work with ApplAI and with the application folders in `job_applications/`. It runs locally over stdio for Claude Desktop, or over HTTP as a claude.ai custom connector, so it can be used from any device through any Claude client (web, mobile or desktop app) and from scheduled tasks, with sign-in through WorkOS AuthKit.
 
 **Claude does the LLM work, ApplAI does the rest.** Claude scores postings and scraped jobs with the same rubric as the pipeline's scorer, and writes the tailored CV (LaTeX) and cover letter. ApplAI scrapes job boards, stores and deduplicates jobs, compiles the documents with its sandboxed pdflatex, and delivers them to Discord for approval and to Notion. The server also checks whether you've already applied, lists and summarises applications across the pipeline database and your folders, and runs pipeline phases. Prompts cover applying to a job, the daily batch, and interview prep and status checks with the claude.ai Gmail and Google Calendar connectors and web search.
 
 It's a thin layer on top of ApplAI. Every pipeline action goes through the ApplAI HTTP API (`X-API-Key`). The server never opens the SQLite database, and it only reads `job_applications/`. ApplAI needs no LLM keys for this flow.
 
 ```
-Claude Desktop ──stdio──▶ applai-mcp ──HTTP + X-API-Key──▶ ApplAI FastAPI (Docker) ──▶ SQLite, LLMs, Discord, Notion
-                              │
-                              └──read-only──▶ job_applications/  (CVs, JD.txt, interview prep)
+Claude Desktop ──stdio─────────────┐
+                                   ├─▶ applai-mcp ──HTTP + X-API-Key──▶ ApplAI FastAPI (Docker) ──▶ SQLite, LLMs, Discord, Notion
+claude.ai ──HTTPS + WorkOS token───┘        │
+                                            └──read-only──▶ job_applications/  (CVs, JD.txt, interview prep)
 ```
 
 ## Tools
@@ -66,6 +67,15 @@ Both prompts tell Claude to stay read-only (no sending, drafting or calendar cha
 - **`CONFIRMATION_MODE=token`** forces the token flow even when the client advertises elicitation. Use it for unattended runs, such as a scheduled task, where no one can answer an elicitation. Each gated call logs the client name, whether it advertised elicitation, and which path ran.
 - **Checks happen before the gate.** `draft_application` rejects a known duplicate, a job that already has documents, a missing country, an unscored job without a score, and unsafe or non-compiling LaTeX. The preview shows the draft's job, score, page counts and warnings. Committing re-checks for duplicates.
 
+**Remote connector (HTTP).** WorkOS AuthKit is the authorization server: it handles sign-in (passkey or MFA), client registration and tokens. This server is a resource server only and has no OAuth code of its own:
+- `/mcp` requires a bearer token. Without one it answers 401 with a `WWW-Authenticate` header pointing at `/.well-known/oauth-protected-resource/mcp`, which names the AuthKit issuer.
+- Tokens are verified against AuthKit's JWKS: RS256 only, exact issuer, audience equal to `MCP_PUBLIC_URL/mcp` (the resource indicator), `exp`, `iat` and `sub` required, 30 s leeway.
+- Only `ALLOWED_USER_ID` gets in. A valid token for any other WorkOS user is rejected.
+- Any failure is a 401, including AuthKit being unreachable. Signing keys are cached for `JWKS_CACHE_SECONDS`; an unknown key id triggers at most one refetch a minute. Rejections are logged with the reason, never the token.
+- Requests must carry the public host name (`Host`), and a browser `Origin` other than the server's own, claude.ai or claude.com is refused.
+- `/healthz` is the only open route, and it calls nothing.
+- Run it with `CONFIRMATION_MODE=token`: scheduled tasks can't answer elicitation. Confirmation tokens are per process, so they work across HTTP sessions until the server restarts.
+
 **Claude-written documents.** The CV and cover letter rules come from ApplAI (`CV_RULES`, `CL_RULES`), the same text its own generator uses. The CV LaTeX goes through ApplAI's safety checks (no file I/O, file embedding such as `\pdfobj` or `\special`, shell escape or Lua) and is compiled in the same sandbox. The engine (pdfLaTeX or XeLaTeX) and the page limit come from the template, never from Claude's text. The cover letter body is inserted as escaped plain text, never as LaTeX.
 
 **Inputs and outputs.**
@@ -121,7 +131,7 @@ Use container paths here, because the API runs inside Docker.
 
 ### Claude Desktop
 
-Add the server to `~/Library/Application Support/Claude/claude_desktop_config.json`, using absolute paths (`which uv`), then restart Claude Desktop:
+Add the server to Claude Desktop's `claude_desktop_config.json` (Settings → Developer → Edit Config), using absolute paths (`which uv`), then restart Claude Desktop:
 
 ```json
 {
@@ -140,6 +150,24 @@ To inspect the tools and schemas without a client:
 npx @modelcontextprotocol/inspector uv run --directory mcp_server applai-mcp
 ```
 
+### Remote connector (HTTP)
+
+`applai-mcp --transport http` (or `MCP_TRANSPORT=http`) serves streamable HTTP at `/mcp` on `HTTP_HOST:HTTP_PORT` (default `127.0.0.1:8080`). Put it behind a TLS reverse proxy. The [`Dockerfile`](Dockerfile) and [`../deploy/`](../deploy/README.md) (Compose, Caddy, runbook) do this on a server. It needs three more settings, which stdio never reads:
+
+| Setting | Value |
+|---|---|
+| `MCP_PUBLIC_URL` | Public origin, e.g. `https://mcp.example.com`. The connector URL is this plus `/mcp`. |
+| `AUTHKIT_ISSUER` | Your AuthKit domain, e.g. `https://your-subdomain.authkit.app` |
+| `ALLOWED_USER_ID` | Your WorkOS user id (`user_…`) |
+
+**WorkOS** (production environment):
+1. AuthKit: enable passkeys or MFA, and turn off sign-ups (or restrict them to your email).
+2. Connect → Configuration: enable Dynamic Client Registration and Client ID Metadata Documents, and add the resource indicator `MCP_PUBLIC_URL/mcp`. With it, tokens carry that URL as `aud`, which this server requires.
+3. If asked for redirect URIs, allow `https://claude.ai/api/mcp/auth_callback` and `https://claude.com/api/mcp/auth_callback`.
+4. Sign in once, then copy your user id and the AuthKit domain into the settings above.
+
+**claude.ai:** Settings → Connectors → Add custom connector. URL `MCP_PUBLIC_URL/mcp`, leave client ID and secret empty, then Connect and sign in at WorkOS. The connector is then available in every Claude client (web, mobile and desktop apps) and in scheduled tasks. In Desktop, enable either the stdio server or the connector, not both.
+
 ## Development
 
 ```bash
@@ -151,12 +179,14 @@ The tests don't need ApplAI, Docker or the network:
 - The API is faked with `httpx2.MockTransport`.
 - `job_applications/` is a temporary tree.
 - Both confirmation paths are covered: an elicitation callback, and the token flow.
+- The HTTP app runs in process through `httpx2.ASGITransport`, with tokens signed by a test RSA key and a fake JWKS. Every rejection case has a test.
 
-Layout: `server.py` (factory), `state.py` (lifespan), `client.py` (API), `confirm.py` (gate), `applications_fs.py` (folder index), `runs.py` (background phases) and `tools/`.
+Layout: `server.py` (factory and HTTP app), `auth.py` (token verifier), `state.py` (lifespan), `client.py` (API), `confirm.py` (gate), `applications_fs.py` (folder index), `runs.py` (background phases) and `tools/`.
 
 ## Limitations
 
-- **Process-local runs.** Run tracking lives in memory. If the MCP server restarts, a phase keeps running in ApplAI but `get_pipeline_run` forgets it.
+- **Process-local runs.** Run tracking lives in memory. If the MCP server restarts, a phase keeps running in ApplAI but `get_pipeline_run` forgets it. Pending confirmation tokens are lost too; ask again.
+- **One user.** The HTTP transport admits a single WorkOS user. There are no scopes or roles.
 - **Claude usage.** Scoring and writing run on the client's Claude plan. Batches are capped (30 scores per `record_scores` call; `daily_run` defaults to 5 documents).
 - **Login-walled pages.** These can't be fetched; paste the text instead.
 - **DNS rebinding.** The URL guard checks resolved addresses before connecting, and the HTTP client resolves again afterwards. That gap is accepted because callers must hold the API key.
