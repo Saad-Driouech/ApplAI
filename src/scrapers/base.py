@@ -57,7 +57,7 @@ class BaseScraper(ABC):
     Abstract base for all job board scrapers.
 
     Subclasses must set:
-      - `source_name`: str  — unique identifier, e.g. "indeed"
+      - `source_name`: str  — unique identifier, e.g. "arbeitnow"
       - `base_url`: str     — root URL of the job board
 
     Subclasses must implement:

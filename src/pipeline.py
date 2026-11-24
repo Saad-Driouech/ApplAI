@@ -79,11 +79,6 @@ def _build_scrapers(cfg, db_path: Path) -> list:
     else:
         log.debug("Adzuna scraper disabled (ADZUNA_APP_ID / ADZUNA_APP_KEY not set)")
 
-    # ── Legacy scrapers (blocked/dead — enable once fixed) ────────────────
-    # scrapers.append(IndeedRssScraper(db_path, country="DE"))    # 403 anti-bot
-    # scrapers.append(StepStoneRssScraper(db_path, country="DE")) # 404
-    # scrapers.append(BaytRssScraper(db_path, country="SA"))      # 403 anti-bot
-
     return scrapers
 
 

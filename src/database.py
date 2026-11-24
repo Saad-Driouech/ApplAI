@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS schema_meta (
 CREATE TABLE IF NOT EXISTS jobs (
     id              TEXT PRIMARY KEY,          -- SHA-256 of (source + external_id)
     external_id     TEXT NOT NULL,             -- board-specific ID / URL hash
-    source          TEXT NOT NULL,             -- "indeed", "glassdoor", "stepstone", "bayt"
+    source          TEXT NOT NULL,             -- scraper source_name, or "mcp" for jobs added by Claude
     title           TEXT NOT NULL,
     company         TEXT NOT NULL,
     city            TEXT,

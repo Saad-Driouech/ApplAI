@@ -4,7 +4,7 @@ Structured logging for ApplAI with PII redaction.
 Usage:
     from src.logger import get_logger
     log = get_logger(__name__)
-    log.info("Scraped job", extra={"job_id": job_id, "source": "indeed"})
+    log.info("Scraped job", extra={"job_id": job_id, "source": "arbeitnow"})
 
 Emails, phone numbers, API keys and tokens are redacted from every line
 (tracebacks included). Timestamps are UTC.
