@@ -59,6 +59,7 @@ _SCRAPE_QUERY = " OR ".join(SEARCH_TERMS)
 
 def _build_scrapers(cfg, db_path: Path) -> list:
     from src.scrapers.arbeitnow import ArbeitnowScraper
+    from src.scrapers.arbeitsagentur import ArbeitsagenturScraper
     from src.scrapers.englishjobs import EnglishJobsScraper
     from src.scrapers.remotive import RemotiveScraper
     from src.scrapers.remoteok import RemoteOKScraper
@@ -68,6 +69,8 @@ def _build_scrapers(cfg, db_path: Path) -> list:
     # ── Active scrapers ───────────────────────────────────────────────────
     # Arbeitnow: Germany tech jobs, free API
     scrapers.append(ArbeitnowScraper(db_path))
+    # Bundesagentur für Arbeit: keyword search over all German postings, public API
+    scrapers.append(ArbeitsagenturScraper(db_path))
     # EnglishJobs.de: English-speaking jobs in Germany, HTML listing
     scrapers.append(EnglishJobsScraper(db_path))
     # Remotive: remote ML/AI roles globally, free API
@@ -92,7 +95,7 @@ def phase_scrape(cfg) -> int:
     scrapers = _build_scrapers(cfg, cfg.paths.db_path)
     total_new = 0
 
-    # Only EnglishJobs uses the query; the other sources filter by category or return everything
+    # Arbeitsagentur and EnglishJobs search the query's terms; the others filter by category or return everything
     for scraper in scrapers:
         new_jobs = scraper.run(query=_SCRAPE_QUERY, location="Germany")
         total_new += len(new_jobs)

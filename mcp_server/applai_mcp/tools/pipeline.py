@@ -46,7 +46,8 @@ WRITE = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent
 DRAFT = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=False)
 
 PHASE_EFFECTS = {
-    "scrape": ["Query the job boards (Arbeitnow, EnglishJobs.de, Remotive, RemoteOK, Adzuna if configured)",
+    "scrape": ["Query the job boards (Arbeitnow, Bundesagentur für Arbeit, EnglishJobs.de, Remotive, RemoteOK, "
+               "Adzuna if configured)",
                "Insert newly found jobs into the ApplAI database"],
     "score": ["Mark jobs older than JOB_MAX_AGE_DAYS as expired",
               "Score a batch of 'new' jobs with ApplAI's own LLM (fails unless an LLM key is configured; "

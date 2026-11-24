@@ -325,3 +325,85 @@ class TestEnglishJobsParse:
         # Paging stops at the first empty page of each term
         assert len(calls) == 4
         assert all(p["sort"] == "date" for p in calls)
+
+
+# ── Arbeitsagentur ────────────────────────────────────────────────────────
+
+def _ba_hit(ref, title="Machine Learning Engineer (m/w/d)", firma="statworx"):
+    return {
+        "referenznummer": ref, "stellenangebotsTitel": title, "firma": firma,
+        "datumErsteVeroeffentlichung": "2026-11-17",
+        "stellenlokationen": [{"adresse": {"ort": "Frankfurt am Main", "land": "DEUTSCHLAND"}}],
+    }
+
+
+class TestArbeitsagentur:
+    def _scraper(self, known=()):
+        from src.scrapers.arbeitsagentur import ArbeitsagenturScraper
+
+        scraper = ArbeitsagenturScraper.__new__(ArbeitsagenturScraper)
+        scraper._max_pages, scraper._page_size, scraper._days = 3, 2, 7
+        scraper._known = lambda refs: set(refs) & set(known)
+        return scraper
+
+    def _fake_get(self, searches, details, calls):
+        def fake_get(url, params=None, headers=None):
+            calls.append(url)
+            assert headers["X-API-Key"] == "jobboerse-jobsuche"
+            if params:  # search
+                assert params["angebotsart"] == 1 and params["zeitarbeit"] == "false" and params["pav"] == "false"
+                return SimpleNamespace(json=lambda: searches[(params["was"], params["page"])])
+            ref = __import__("base64").b64decode(url.rsplit("/", 1)[1]).decode()
+            if isinstance(details[ref], Exception):
+                raise details[ref]
+            return SimpleNamespace(json=lambda: details[ref])
+        return fake_get
+
+    def test_searches_each_term_and_fetches_details_for_new_relevant_titles(self, monkeypatch):
+        scraper = self._scraper(known={"known"})
+        searches = {
+            ("AI Engineer", 1): {"maxErgebnisse": 3, "ergebnisliste": [_ba_hit("a"), _ba_hit("known")]},
+            ("AI Engineer", 2): {"maxErgebnisse": 3, "ergebnisliste": [_ba_hit("sales", title="Vertriebsmitarbeiter")]},
+            ("Data Scientist", 1): {"maxErgebnisse": 2, "ergebnisliste": [_ba_hit("a"), _ba_hit("lead", title="Lead Data Scientist")]},
+        }
+        details = {"a": {"stellenangebotsBeschreibung": "Build ML systems with PyTorch.", "firma": "statworx GmbH"}}
+        calls = []
+        monkeypatch.setattr(scraper, "_get", self._fake_get(searches, details, calls))
+
+        [job] = scraper._fetch_jobs("AI Engineer OR Data Scientist", "Germany")
+
+        assert job["external_id"] == "a"
+        assert job["company"] == "statworx GmbH"
+        assert job["description"] == "Build ML systems with PyTorch."
+        assert job["city"] == "Frankfurt am Main" and job["country"] == "DE"
+        assert job["source_url"] == "https://www.arbeitsagentur.de/jobsuche/jobdetail/a"
+        assert job["posted_at"] == "2026-11-17"
+        # One detail request: known, irrelevant and above-senior titles are never fetched
+        assert sum("/jobdetails/" in c for c in calls) == 1
+
+    def test_skips_private_placement_and_failed_details(self, monkeypatch):
+        scraper = self._scraper()
+        searches = {("AI Engineer", 1): {"maxErgebnisse": 2, "ergebnisliste": [_ba_hit("pav"), _ba_hit("broken")]}}
+        details = {"pav": {"istPrivateArbeitsvermittlung": True}, "broken": RuntimeError("503")}
+        monkeypatch.setattr(scraper, "_get", self._fake_get(searches, details, []))
+
+        assert scraper._fetch_jobs("AI Engineer", "Germany") == []
+
+    def test_raises_only_when_every_search_fails(self, monkeypatch):
+        from src.scrapers.base import ScraperError
+
+        scraper = self._scraper()
+
+        def failing(url, params=None, headers=None):
+            raise RuntimeError("403 Forbidden")
+
+        monkeypatch.setattr(scraper, "_get", failing)
+        with pytest.raises(ScraperError, match="403"):
+            scraper._fetch_jobs("AI Engineer OR Data Scientist", "Germany")
+
+    def test_foreign_location_is_not_tagged_germany(self):
+        hit = _ba_hit("x")
+        hit["stellenlokationen"][0]["adresse"]["land"] = "SCHWEIZ"
+        assert self._scraper()._map_item(hit, {})["country"] == "CH"
+        hit["stellenlokationen"][0]["adresse"]["land"] = "POLEN"
+        assert self._scraper()._map_item(hit, {})["country"] == "XX"
