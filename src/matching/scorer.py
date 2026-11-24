@@ -42,6 +42,7 @@ _AI_KEYWORDS = {
     "prompt engineering", "mlops", "aiops", "data science",
     "data scientist", "ml engineer", "ai engineer", "applied scientist",
     "research scientist", "ai researcher", "künstliche intelligenz", "künstlicher intelligenz",
+    "forward deployed",
     # Frameworks and libraries
     "pytorch", "tensorflow", "keras", "scikit-learn", "sklearn",
     "hugging face", "huggingface", "langchain", "llamaindex",
@@ -58,7 +59,9 @@ _AI_KEYWORDS = {
 
 # Too generic to signal an AI/ML role when they only appear in the description
 # (most postings now mention "AI" in passing); they still count in the title.
-_TITLE_ONLY_KEYWORDS = {"ai", "dl", "ki", "pandas", "numpy", "scipy", "matplotlib", "airflow", "databricks"}
+_TITLE_ONLY_KEYWORDS = {
+    "ai", "dl", "ki", "pandas", "numpy", "scipy", "matplotlib", "airflow", "databricks", "forward deployed",
+}
 
 
 def _keyword_pattern(keywords: set[str]) -> re.Pattern:
@@ -93,6 +96,11 @@ _EXCLUDED_TITLE_PATTERN = re.compile(
 def is_excluded_title(title: str) -> bool:
     """True for working-student and above-senior titles, which are skipped without an LLM call."""
     return bool(_EXCLUDED_TITLE_PATTERN.search(title or ""))
+
+
+def title_is_relevant(title: str) -> bool:
+    """True if the title alone passes the title and keyword pre-filters; gates per-job detail requests."""
+    return not is_excluded_title(title) and has_ai_keywords(title, "")
 
 
 def prefilter_reason(job: dict, allowed_countries: Optional[frozenset]) -> Optional[tuple[str, str]]:

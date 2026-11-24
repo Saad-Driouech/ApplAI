@@ -4,7 +4,7 @@ import pytest
 import src.database as db
 from src.matching.gemini_client import BudgetExceeded
 from src.matching.response_parser import ScoreParseError, parse_score_response
-from src.matching.scorer import Scorer, has_ai_keywords, is_excluded_title
+from src.matching.scorer import Scorer, has_ai_keywords, is_excluded_title, title_is_relevant
 
 
 class _FakeClient:
@@ -264,6 +264,21 @@ class TestIsExcludedTitle:
     ])
     def test_kept(self, title):
         assert is_excluded_title(title) is False
+
+
+class TestTitleIsRelevant:
+    @pytest.mark.parametrize("title", [
+        "Machine Learning Engineer (m/w/d)", "Forward Deployed Engineer", "Junior Data Scientist", "KI-Entwickler",
+    ])
+    def test_relevant(self, title):
+        assert title_is_relevant(title) is True
+
+    @pytest.mark.parametrize("title", ["Software Engineer", "Lead Data Scientist", "Werkstudent KI", ""])
+    def test_not_relevant(self, title):
+        assert title_is_relevant(title) is False
+
+    def test_forward_deployed_only_counts_in_title(self):
+        assert has_ai_keywords("Account Manager", "Work closely with our forward deployed team.") is False
 
 
 class TestScorePrompt:

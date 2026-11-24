@@ -50,7 +50,11 @@ def _exclusive(phase: str):
     return decorator
 
 
-_SCRAPE_QUERY = "Machine Learning Engineer OR AI Engineer OR Applied AI Researcher OR Data Scientist"
+SEARCH_TERMS = (
+    "Machine Learning Engineer", "AI Engineer", "Applied AI Researcher", "Data Scientist", "Forward Deployed Engineer",
+)
+# Scrapers with keyword search split this on " OR "
+_SCRAPE_QUERY = " OR ".join(SEARCH_TERMS)
 
 
 def _build_scrapers(cfg, db_path: Path) -> list:
