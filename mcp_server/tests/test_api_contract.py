@@ -13,7 +13,9 @@ import pytest
 from pydantic import BaseModel
 
 from applai_mcp import models
-from conftest import COMMITTED, SCORING_CONTEXT, FakeApi, JD, body, call, draft, job, resolve_response
+from conftest import (
+    COMMITTED, SCORING_CONTEXT, FakeApi, JD, body, call, candidate, draft, job, resolve_response, watched,
+)
 
 API_MODELS = Path(__file__).resolve().parents[2] / "src" / "api_models.py"
 
@@ -41,6 +43,9 @@ MIRRORS: dict[type[BaseModel], type[BaseModel]] = {
     models.GenerationContext: api.GenerationContext,
     models.Draft: api.DraftResponse,
     models.GenerateResult: api.GenerateResponse,
+    models.BoardCandidate: api.BoardCandidate,
+    models.WatchedCompany: api.WatchedCompany,
+    models.WatchResult: api.WatchResponse,
 }
 # Fields the MCP server adds for Claude; they are never read from the API
 MCP_ONLY = {(models.GenerateResult, "next_step")}
@@ -85,6 +90,7 @@ def test_mirror_matches_api_model(mirror):
 @pytest.mark.parametrize("model,key", [
     (api.JobsToScoreResponse, "jobs"), (api.ScoresResponse, "results"),
     (api.DuplicatesResponse, "matches"), (api.JobListResponse, "jobs"),
+    (api.DetectResponse, "candidates"), (api.WatchlistResponse, "companies"),
 ], ids=lambda v: v if isinstance(v, str) else v.__name__)
 def test_envelope_keys_the_client_unwraps(model, key):
     assert key in model.model_fields
@@ -111,6 +117,8 @@ def _assert_known_fields(model: type[BaseModel], data: dict) -> None:
     (api.ScoringContext, SCORING_CONTEXT),
     (api.DraftResponse, draft()),
     (api.GenerateResponse, COMMITTED),
+    (api.WatchedCompany, watched()),
+    (api.BoardCandidate, candidate()),
     *[(model, FakeApi().routes[route]) for route, model in [
         ("GET /jobs", api.JobListResponse), ("GET /jobs/duplicates", api.DuplicatesResponse)]],
 ], ids=lambda v: v.__name__ if isinstance(v, type) else "")
@@ -136,6 +144,14 @@ class TestRequestBodies:
             await call(client, "record_scores", {"scores": [
                 {"job_id": "j1", "score": 7.5, "reasoning": "fit", "is_job_posting": True, "scored_by": "claude"}]})
         _assert_known_fields(api.ScoresRequest, body(fake_api.calls("POST /jobs/scores")[0]))
+
+    async def test_watchlist(self, make_client, fake_api):
+        fake_api.routes["POST /watchlist/detect"] = {"candidates": [candidate()]}
+        fake_api.routes["POST /watchlist"] = {"company": watched(), "added": True, "job_count": 1, "sample_titles": []}
+        async with make_client() as client:
+            await call(client, "watch_company", {"name": "Helsing", "careers_url": "https://helsing.ai/careers"})
+        _assert_known_fields(api.DetectRequest, body(fake_api.calls("POST /watchlist/detect")[0]))
+        _assert_known_fields(api.WatchRequest, body(fake_api.calls("POST /watchlist")[0]))
 
     @pytest.mark.parametrize("source", [
         {"job_id": "j1"},

@@ -53,6 +53,19 @@ COMMITTED = {"job_id": "j1", "application_id": DRAFT_ID, "status": "delivered", 
 COMMIT = f"POST /drafts/{DRAFT_ID}/commit"
 
 
+def watched(**overrides: Any) -> dict:
+    base = {"id": 1, "name": "Helsing", "ats": "greenhouse", "slug": "helsing", "careers_url": None, "active": True,
+            "added_at": "2026-11-25T10:00:00+00:00", "last_checked_at": None, "last_job_count": None,
+            "last_relevant_count": None, "last_error": None}
+    return {**base, **overrides}
+
+
+def candidate(**overrides: Any) -> dict:
+    base = {"ats": "greenhouse", "slug": "helsing", "found_by": "page", "job_count": 176,
+            "sample_titles": ["AI Research Engineer", "Deployed AI Engineer"], "error": None}
+    return {**base, **overrides}
+
+
 class FakeApi:
     """Routes '<METHOD> <path>' to a JSON body, a (status, body) tuple, or a callable(request)."""
 

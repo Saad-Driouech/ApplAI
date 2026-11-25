@@ -232,3 +232,63 @@ class DraftResponse(BaseModel):
     cover_letter_pages: Optional[int] = None
     warnings: list[str] = Field(default_factory=list)
     committed: bool = False
+
+
+# ── Company watchlist: public ATS job boards polled by the scrape phase ──
+
+ATS_PATTERN = r"^(?:greenhouse|lever|ashby|smartrecruiters|personio|recruitee|workable)$"
+SLUG_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$"
+HTTPS_URL = r"^https://"
+
+
+class DetectRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=150, description="Company name")
+    careers_url: Optional[str] = Field(None, max_length=2000, pattern=HTTPS_URL,
+                                       description="Careers page or job board URL; the most reliable way to find the board")
+
+
+class BoardCandidate(BaseModel):
+    ats: str
+    slug: str
+    found_by: str = Field(description="url: in the careers URL; page: linked from the careers page; "
+                                      "guess: guessed from the name and possibly another company's board")
+    job_count: int = Field(description="Jobs on the board right now")
+    sample_titles: list[str] = Field(description="Up to 3 titles, AI/ML roles first")
+    error: Optional[str] = Field(None, description="Why the board could not be read")
+
+
+class DetectResponse(BaseModel):
+    candidates: list[BoardCandidate]
+
+
+class WatchRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=150, description="Company name, used as the jobs' company")
+    ats: str = Field(pattern=ATS_PATTERN)
+    slug: str = Field(pattern=SLUG_PATTERN, description="Board slug from /watchlist/detect")
+    careers_url: Optional[str] = Field(None, max_length=2000, pattern=HTTPS_URL)
+
+
+class WatchedCompany(BaseModel):
+    id: int
+    name: str
+    ats: str
+    slug: str
+    careers_url: Optional[str] = None
+    active: bool
+    added_at: str
+    last_checked_at: Optional[str] = Field(None, description="Last scrape that read the board")
+    last_job_count: Optional[int] = Field(None, description="Jobs on the board at the last successful read")
+    last_relevant_count: Optional[int] = Field(None, description="Of those, jobs whose title passed the pre-filters")
+    last_error: Optional[str] = Field(None, description="Error from the last read, if it failed")
+
+
+class WatchResponse(BaseModel):
+    company: WatchedCompany
+    added: bool = Field(description="False when the board was already on the watchlist (it is reactivated)")
+    job_count: int
+    sample_titles: list[str]
+
+
+class WatchlistResponse(BaseModel):
+    count: int
+    companies: list[WatchedCompany]

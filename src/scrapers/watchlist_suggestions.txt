@@ -1,0 +1,63 @@
+# Companies suggested for the watchlist: "Name" or "Name | careers or job board URL".
+# The seed script detects each board; review its report before applying it.
+
+# Germany: AI labs, AI products, robotics and defence
+Aleph Alpha
+Black Forest Labs
+DeepL | https://jobs.ashbyhq.com/deepl
+Parloa | https://jobs.ashbyhq.com/parloa
+n8n | https://jobs.ashbyhq.com/n8n
+Langfuse | https://jobs.ashbyhq.com/langfuse
+Langdock
+deepset
+Cognigy
+Celonis
+Merantix Momentum
+Quantum Systems
+Isar Aerospace
+ARX Robotics
+Neura Robotics
+Agile Robots
+Konux
+Twaice
+Taktile
+Tacto
+Buena
+
+# Germany: scale-ups with ML teams
+Personio
+Trade Republic
+N26
+Contentful
+GetYourGuide
+SumUp
+HelloFresh
+Enpal
+1KOMMA5
+Pliant
+
+# Global AI companies with offices in Germany or Europe
+Databricks | https://job-boards.greenhouse.io/databricks
+Anthropic | https://job-boards.greenhouse.io/anthropic
+OpenAI | https://jobs.ashbyhq.com/openai
+Google DeepMind | https://job-boards.greenhouse.io/deepmind
+Mistral AI | https://mistral.ai/careers
+Hugging Face | https://apply.workable.com/huggingface
+ElevenLabs | https://jobs.ashbyhq.com/elevenlabs
+Synthesia | https://jobs.ashbyhq.com/synthesia
+Cohere | https://jobs.ashbyhq.com/cohere
+Perplexity | https://jobs.ashbyhq.com/perplexity
+Poolside | https://jobs.ashbyhq.com/poolside
+Palantir | https://jobs.lever.co/palantir
+Scale AI | https://job-boards.greenhouse.io/scaleai
+PhysicsX
+PolyAI
+Wayve
+Isomorphic Labs
+Photoroom
+H Company
+Dust
+Pigment
+Doctolib
+Bending Spoons
+Careem

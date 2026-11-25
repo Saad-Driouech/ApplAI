@@ -8,9 +8,12 @@ which ATS and board slug a company uses.
 from __future__ import annotations
 
 import re
+import time
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Iterator, Optional
 from xml.etree.ElementTree import Element  # nosec B405 - type only; parsing uses defusedxml
 
 import defusedxml.ElementTree as SafeET
@@ -81,8 +84,7 @@ def _job(job_id: Any, title: str, url: str, description: str, posted_at: Any, ci
 
 def _greenhouse(get: Get, slug: str, details: bool) -> list[dict]:
     params = {"content": "true"} if details else None
-    data = _first_ok(get, [f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs",
-                           f"https://boards-api.eu.greenhouse.io/v1/boards/{slug}/jobs"], params=params).json()
+    data = get(f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs", params=params).json()
     jobs = []
     for item in data.get("jobs", []):
         location = (item.get("location") or {}).get("name", "")
@@ -228,6 +230,32 @@ def fetch_board(get: Get, ats: str, slug: str, details: bool = True) -> list[dic
     return _ADAPTERS[ats](get, slug, details)
 
 
+_RETRY_STATUS = {429, 500, 502, 503, 504}
+
+
+@contextmanager
+def board_client(timeout: float = 10.0, retries: int = 2) -> Iterator[Get]:
+    """
+    A thread-safe Get for detection, retrying network errors and busy servers. Only ATS hosts built
+    from a checked slug are requested.
+    """
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; ApplAI/1.1)", "Accept": "application/json, text/xml;q=0.9, */*;q=0.8"}
+    with httpx.Client(headers=headers, timeout=timeout, follow_redirects=True) as client:
+        def get(url: str, **kwargs: Any) -> httpx.Response:
+            for attempt in range(retries + 1):
+                try:
+                    resp = client.get(url, **kwargs)
+                    if resp.status_code not in _RETRY_STATUS or attempt == retries:
+                        resp.raise_for_status()
+                        return resp
+                except httpx.TransportError:
+                    if attempt == retries:
+                        raise
+                time.sleep(2 ** attempt)
+            raise AssertionError("unreachable")
+        yield get
+
+
 # ── Detection ─────────────────────────────────────────────────────────────
 
 _BOARD_PATTERNS = (
@@ -253,7 +281,7 @@ class Candidate:
     found_by: str                 # "url", "page" or "guess"
     job_count: int = 0
     sample_titles: list[str] = field(default_factory=list)
-    error: Optional[str] = None
+    error: Optional[str] = None   # the board could not be read (a missing board is not an error)
 
 
 def boards_in(text: str) -> list[tuple[str, str]]:
@@ -268,10 +296,13 @@ def boards_in(text: str) -> list[tuple[str, str]]:
 
 
 def guess_slugs(name: str) -> list[str]:
-    """Likely board slugs for a company name ('Munich Electrification' -> munichelectrification, munich-electrification)."""
-    base = re.sub(r"\b(gmbh|ag|se|inc|ltd|llc|group|gruppe)\b", "", name.lower().replace("'", ""))
-    words = re.findall(r"[a-z0-9]+", base)
-    slugs = ["".join(words), "-".join(words)]
+    """
+    Likely board slugs for a company name, with and without a legal-form suffix
+    ('iba AG' -> ibaag, iba-ag, iba).
+    """
+    full = re.findall(r"[a-z0-9]+", name.lower().replace("'", ""))
+    short = [w for w in full if w not in {"gmbh", "ag", "se", "inc", "ltd", "llc", "group", "gruppe"}]
+    slugs = ["".join(full), "-".join(full), "".join(short), "-".join(short)]
     return [s for i, s in enumerate(slugs) if s and _SLUG.fullmatch(s) and s not in slugs[:i]]
 
 
@@ -279,6 +310,10 @@ def probe(get: Get, candidate: Candidate) -> Candidate:
     """Fill in the job count and sample titles (relevant ones first) by reading the board."""
     try:
         jobs = fetch_board(get, candidate.ats, candidate.slug, details=False)
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code != 404:   # every ATS answers 404 for a board that does not exist
+            candidate.error = f"HTTP {exc.response.status_code}"
+        return candidate
     except Exception as exc:
         candidate.error = f"{type(exc).__name__}: {exc}"[:300]
         return candidate
@@ -304,8 +339,13 @@ def detect_ats(get: Get, name: str, careers_url: Optional[str] = None,
                 candidates = [Candidate(ats, slug, "page") for ats, slug in boards_in(final_url + " " + html)]
             except Exception as exc:
                 log.info("[ats] Careers page %s unreadable: %s", careers_url, exc)
-        candidates = [probe(get, c) for c in candidates[:5]]
+        candidates = _probe_all(get, candidates[:5])
         if any(c.job_count for c in candidates):
             return candidates
     guesses = [Candidate(ats, slug, "guess") for slug in guess_slugs(name) for ats in ATS_NAMES]
-    return candidates + [c for c in (probe(get, g) for g in guesses) if c.job_count]
+    return candidates + [c for c in _probe_all(get, guesses) if c.job_count or c.error]
+
+
+def _probe_all(get: Get, candidates: list[Candidate]) -> list[Candidate]:
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        return list(pool.map(lambda c: probe(get, c), candidates))

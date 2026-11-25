@@ -15,7 +15,7 @@ from applai_mcp import prompts
 from applai_mcp.auth import JwtTokenVerifier
 from applai_mcp.config import HttpSettings, Settings
 from applai_mcp.state import make_lifespan
-from applai_mcp.tools import applications, batch, pipeline, prep, scoring
+from applai_mcp.tools import applications, batch, pipeline, prep, scoring, watchlist
 
 INSTRUCTIONS = """\
 ApplAI is the user's job-application pipeline. You do the scoring and writing; ApplAI scrapes job boards,
@@ -25,6 +25,8 @@ profile and threshold; score with them and store batch scores with record_scores
 Documents: get_generation_context, then write the tailored CV LaTeX and cover letter body following its
 rules, then draft_application and fix any reported problems. generate_application turns the draft into
 an application and sends it to Discord for the user's approval.
+Sources: watch_company adds a company's public job board, which every scrape then reads
+(list_watched_companies, unwatch_company).
 For the state of the search use list_applications, get_stats, check_duplicate and get_application. For
 interview prep or follow-ups, combine get_application with the Gmail and Google Calendar connectors
 (read only) and web search. The apply_to_job, daily_run, interview_prep and application_status prompts
@@ -61,6 +63,7 @@ def create_server(settings: Settings, transport: httpx2.AsyncBaseTransport | Non
     applications.register(server)
     pipeline.register(server)
     prep.register(server)
+    watchlist.register(server)
     prompts.register(server)
     if http is not None:
         server.custom_route("/healthz", methods=["GET"])(_healthz)

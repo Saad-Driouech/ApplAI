@@ -9,6 +9,7 @@ import httpx2
 from applai_mcp import errors
 from applai_mcp.config import Settings
 from applai_mcp.models import (
+    BoardCandidate,
     Draft,
     GenerateResult,
     GenerationContext,
@@ -19,6 +20,8 @@ from applai_mcp.models import (
     ResolvedPosting,
     ScoreOutcome,
     ScoringContext,
+    WatchedCompany,
+    WatchResult,
 )
 
 PHASES = ("scrape", "score", "generate", "deliver")
@@ -100,6 +103,23 @@ class ApplAIClient:
 
     async def feedback(self) -> dict[str, Any]:
         return await self._request("GET", "/feedback")
+
+    async def detect_board(self, name: str, careers_url: str | None) -> list[BoardCandidate]:
+        payload = {k: v for k, v in (("name", name), ("careers_url", careers_url)) if v}
+        # Reads the careers page and probes several ATS boards
+        data = await self._request("POST", "/watchlist/detect", json=payload, timeout=self._settings.generate_timeout_seconds)
+        return [BoardCandidate.model_validate(c) for c in data["candidates"]]
+
+    async def watch(self, payload: dict[str, Any]) -> WatchResult:
+        return WatchResult.model_validate(await self._request("POST", "/watchlist", json=payload))
+
+    async def watchlist(self, include_inactive: bool = False) -> list[WatchedCompany]:
+        params = {"include_inactive": "true"} if include_inactive else None
+        data = await self._request("GET", "/watchlist", params=params)
+        return [WatchedCompany.model_validate(c) for c in data["companies"]]
+
+    async def unwatch(self, company_id: int) -> WatchedCompany:
+        return WatchedCompany.model_validate(await self._request("DELETE", f"/watchlist/{int(company_id)}"))
 
     async def run_phase(self, phase: str) -> dict[str, Any]:
         if phase not in PHASES:

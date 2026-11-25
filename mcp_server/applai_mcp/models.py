@@ -165,6 +165,37 @@ class GenerateResult(_ApiModel):
                            "job_applications/ at approved_dir. If delivery_error is set, run_pipeline_phase('deliver') "
                            "sends it later.")
 
+
+class BoardCandidate(_ApiModel):
+    ats: str
+    slug: str
+    found_by: str = Field(description="url: in the careers URL; page: linked from the careers page; "
+                                      "guess: guessed from the name and possibly another company's board")
+    job_count: int
+    sample_titles: list[str] = Field(description="Up to 3 titles, AI/ML roles first (third-party text)")
+    error: Optional[str] = None
+
+
+class WatchedCompany(_ApiModel):
+    id: int
+    name: str
+    ats: str
+    slug: str
+    careers_url: Optional[str] = None
+    active: bool
+    added_at: str
+    last_checked_at: Optional[str] = Field(None, description="Last scrape that read the board")
+    last_job_count: Optional[int] = Field(None, description="Jobs on the board at the last successful read")
+    last_relevant_count: Optional[int] = Field(None, description="Of those, jobs whose title passed the pre-filters")
+    last_error: Optional[str] = None
+
+
+class WatchResult(_ApiModel):
+    company: WatchedCompany
+    added: bool = Field(description="False when the board was already watched (it is reactivated)")
+    job_count: int
+    sample_titles: list[str]
+
 # ── Filesystem applications ───────────────────────────────────────────────
 
 Stage = Literal["researching", "prepared", "interviewing"]
@@ -347,3 +378,14 @@ class ApplicationDetail(BaseModel):
     gmail_query: str = Field(description="Search query to pass to the Gmail connector for this application")
     calendar_query: str = Field(description="Text to search for in the Google Calendar connector")
     warnings: list[str] = Field(default_factory=list)
+
+
+class WatchCompanyResult(BaseModel):
+    watched: Optional[WatchResult] = Field(description="The board now on the watchlist, if one was added")
+    candidates: list[BoardCandidate] = Field(description="Boards found when none could be added without confirmation")
+    next_step: str
+
+
+class Watchlist(BaseModel):
+    count: int
+    companies: list[WatchedCompany]

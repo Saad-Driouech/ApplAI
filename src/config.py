@@ -120,6 +120,16 @@ class AppConfig:
         return bool(key)
 
 
+def load_paths() -> PathConfig:
+    """Working directory, database and logs paths; needs none of the service credentials."""
+    working_dir = Path(_optional("APPLAI_WORKING_DIR", "/mnt/job_applications"))
+    return PathConfig(
+        working_dir=working_dir,
+        db_path=Path(_optional("APPLAI_DB_PATH", "/data/db/applai.db")),
+        logs_dir=Path(_optional("APPLAI_LOGS_DIR", str(working_dir / "logs"))),
+    )
+
+
 def load() -> AppConfig:
     """
     Load and validate all configuration from environment variables.
@@ -161,15 +171,7 @@ def load() -> AppConfig:
         enabled=ollama_enabled,
     )
 
-    working_dir = Path(_optional("APPLAI_WORKING_DIR", "/mnt/job_applications"))
-    db_path = Path(_optional("APPLAI_DB_PATH", "/data/db/applai.db"))
-    logs_dir = Path(_optional("APPLAI_LOGS_DIR", str(working_dir / "logs")))
-
-    paths = PathConfig(
-        working_dir=working_dir,
-        db_path=db_path,
-        logs_dir=logs_dir,
-    )
+    paths = load_paths()
 
     groq = GroqConfig(
         api_key=_optional("GROQ_API_KEY", ""),

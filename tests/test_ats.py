@@ -5,7 +5,8 @@ import httpx
 import pytest
 
 import src.database as db
-from src.scrapers.ats import AtsError, boards_in, detect_ats, fetch_board, guess_slugs
+from src.scrapers import ats
+from src.scrapers.ats import AtsError, Candidate, boards_in, detect_ats, fetch_board, guess_slugs
 from src.scrapers.location import infer_country
 
 ML_HTML = "<p>Train PyTorch models for our LLM platform.</p>"
@@ -147,9 +148,25 @@ class TestDetection:
         assert boards_in(text) == expected
 
     def test_guess_slugs(self):
-        assert guess_slugs("Munich Electrification GmbH") == ["munichelectrification", "munich-electrification"]
+        assert guess_slugs("iba AG") == ["ibaag", "iba-ag", "iba"]
+        assert guess_slugs("Munich Electrification") == ["munichelectrification", "munich-electrification"]
         assert guess_slugs("Mueller's Solutions") == ["muellerssolutions", "muellers-solutions"]
         assert guess_slugs("DeepL") == ["deepl"]
+
+    def test_missing_board_is_not_an_error_but_a_failed_read_is(self):
+        get = fake_get({"https://api.ashbyhq.com/posting-api/job-board/down": httpx.ConnectTimeout("timed out")})
+        missing = ats.probe(get, Candidate("ashby", "gone", "guess"))
+        failed = ats.probe(get, Candidate("ashby", "down", "guess"))
+        assert (missing.job_count, missing.error) == (0, None)
+        assert failed.error.startswith("ConnectTimeout")
+
+    def test_board_client_retries_busy_servers(self, monkeypatch):
+        replies = iter([httpx.Response(503), httpx.Response(200, json={"jobs": []})])
+        transport, real_client = httpx.MockTransport(lambda request: next(replies)), httpx.Client
+        monkeypatch.setattr(ats.httpx, "Client", lambda **kw: real_client(transport=transport, **kw))
+        monkeypatch.setattr(ats.time, "sleep", lambda s: None)
+        with ats.board_client() as get:
+            assert get("https://api.ashbyhq.com/posting-api/job-board/x").json() == {"jobs": []}
 
     def test_careers_url_link_wins_without_guessing(self):
         get = fake_get({"https://api.ashbyhq.com/posting-api/job-board/deepl": {"jobs": [
@@ -172,6 +189,61 @@ class TestDetection:
         })
         candidates = detect_ats(get, "telli")
         assert [(c.ats, c.slug, c.found_by) for c in candidates] == [("ashby", "telli", "guess")]
+
+
+class TestSeedWatchlist:
+    def test_reads_company_folders_and_suggestions(self, tmp_path):
+        from src.scrapers.seed_watchlist import folder_companies, suggested_companies, unique_companies
+
+        (tmp_path / "germany" / "Delivery_Hero").mkdir(parents=True)
+        (tmp_path / "germany" / "Helsing").mkdir()
+        (tmp_path / "germany" / "Cover_Letter.docx").write_text("x")
+        (tmp_path / "resumes" / "tex").mkdir(parents=True)
+        suggestions = tmp_path / "s.txt"
+        suggestions.write_text("# comment\n\nHelsing | https://helsing.ai/careers\nDeepL\n")
+
+        companies = folder_companies(tmp_path, ["germany", "uae"]) + suggested_companies(suggestions)
+        unique = unique_companies(companies)
+
+        assert [(c["name"], c["careers_url"], c["source"]) for c in unique] == [
+            ("Delivery Hero", None, "folder:germany"),
+            ("Helsing", "https://helsing.ai/careers", "folder:germany"),
+            ("DeepL", None, "suggestion"),
+        ]
+
+    def test_watch_defaults_trust_links_over_guesses(self, monkeypatch):
+        from src.scrapers import seed_watchlist
+
+        results = {
+            "Helsing": [Candidate("greenhouse", "helsing", "page", 176), Candidate("lever", "helsing", "guess", 2)],
+            "telli": [Candidate("ashby", "telli", "guess", 14)],
+            "Amazon": [Candidate("personio", "amazon", "guess", 3), Candidate("workable", "amazon", "guess", 1)],
+            "SAP": [],
+        }
+        monkeypatch.setattr(seed_watchlist.ats, "detect_ats", lambda get, name, url, download=None: results[name])
+        rows = {(r["name"], r["ats"]): r["watch"] for name in results
+                for r in seed_watchlist._detect("get", {"name": name, "careers_url": None, "source": "x"})}
+        assert rows == {
+            ("Helsing", "greenhouse"): True, ("Helsing", "lever"): False,
+            ("telli", "ashby"): True,
+            ("Amazon", "personio"): False, ("Amazon", "workable"): False,
+            ("SAP", None): False,
+        }
+
+    def test_apply_watches_only_marked_rows(self, tmp_path):
+        from src.scrapers.seed_watchlist import apply_report
+
+        path = tmp_path / "s.db"
+        db.init_db(path)
+        rows = [
+            {"name": "Helsing", "ats": "greenhouse", "slug": "helsing", "watch": True, "careers_url": None},
+            {"name": "Amazon", "ats": "personio", "slug": "amazon", "watch": False},
+            {"name": "SAP", "ats": None, "slug": None, "watch": False},
+        ]
+        assert apply_report(path, rows) == (1, 0)
+        assert apply_report(path, rows) == (0, 1)
+        with pytest.raises(AtsError):
+            apply_report(path, [{"name": "X", "ats": "personio", "slug": "evil.com/#", "watch": True}])
 
 
 class TestWatchlistScraper:

@@ -26,6 +26,12 @@ Claude-authored flow (Claude scores and writes through the MCP server, ApplAI st
   GET  /drafts/{draft_id}     — a draft's page counts and job
   POST /drafts/{id}/commit    — turn a draft into an application and deliver it to Discord + Notion
 
+Company watchlist (public ATS job boards the scrape phase polls):
+  POST /watchlist/detect      — find a company's board from its careers URL or name
+  POST /watchlist             — watch a board
+  GET  /watchlist             — watched companies with their last poll results
+  DELETE /watchlist/{id}      — stop watching a board
+
 Without LLM keys, /score, /generate, /jobs/score and /jobs/generate return 503.
 All routes except /health and /discord/interactions (Ed25519-verified)
 require the X-API-Key header.
@@ -56,6 +62,9 @@ from src.logger import audit, get_logger
 from src.api_models import (
     COUNTRY_PATTERN,
     CV_TEMPLATE_NAME,
+    BoardCandidate,
+    DetectRequest,
+    DetectResponse,
     DraftRequest,
     DraftResponse,
     DuplicatesResponse,
@@ -77,6 +86,10 @@ from src.api_models import (
     ScoresRequest,
     ScoresResponse,
     ScoringContext,
+    WatchedCompany,
+    WatchlistResponse,
+    WatchRequest,
+    WatchResponse,
 )
 from src.documents.cover_letter import CL_RULES, CoverLetterError
 from src.documents.cv_generator import CV_RULES, CVGenerationError, CVGenerator
@@ -97,7 +110,8 @@ from src.pipeline import (
     resolve_cv_template,
     score_single_job,
 )
-from src.scrapers.single_url import JobFetchError, fetch_job_posting
+from src.scrapers import ats
+from src.scrapers.single_url import JobFetchError, _download, fetch_job_posting
 from src.utils.jd_sanitizer import sanitize_jd
 from src.utils.locks import PhaseBusy, phase_lock
 from src.utils.sanitize import sanitize_job
@@ -719,6 +733,56 @@ def get_job(job_id: str, clean: bool = Query(False, description="Description aft
     if clean:
         detail.description = _clean_description(detail.description)
     return detail
+
+
+# ── Company watchlist ─────────────────────────────────────────────────────
+
+
+@app.post("/watchlist/detect", dependencies=_auth, response_model=DetectResponse)
+def detect_board(req: DetectRequest):
+    """Find a company's public ATS job board, from its careers URL or by guessing slugs from its name."""
+    with ats.board_client() as get:
+        candidates = ats.detect_ats(get, req.name, req.careers_url, download=_download)
+    return DetectResponse(candidates=[BoardCandidate(**vars(c)) for c in candidates])
+
+
+@app.post("/watchlist", dependencies=_auth, response_model=WatchResponse)
+def watch_company(req: WatchRequest):
+    """Add a board to the watchlist after checking that it can be read and has jobs."""
+    with ats.board_client() as get:
+        board = ats.probe(get, ats.Candidate(req.ats, req.slug, "url"))
+    if board.error or not board.job_count:
+        raise HTTPException(status_code=422, detail=f"Board {req.ats}/{req.slug} has no readable jobs"
+                                                    + (f": {board.error}" if board.error else ""))
+    cfg = _get_cfg()
+    with db.get_conn(cfg.paths.db_path) as conn:
+        company_id, added = db.add_watched_company(conn, req.name.strip(), req.ats, req.slug, req.careers_url)
+        row = db.get_watched_company(conn, company_id)
+    audit("watchlist_add", company=req.name, ats=req.ats, slug=req.slug, added=added)
+    return WatchResponse(company=WatchedCompany(**dict(row)), added=added,
+                         job_count=board.job_count, sample_titles=board.sample_titles)
+
+
+@app.get("/watchlist", dependencies=_auth, response_model=WatchlistResponse)
+def list_watchlist(include_inactive: bool = Query(False)):
+    cfg = _get_cfg()
+    with db.get_conn(cfg.paths.db_path) as conn:
+        rows = db.list_watched_companies(conn, active_only=not include_inactive)
+    companies = [WatchedCompany(**dict(r)) for r in rows]
+    return WatchlistResponse(count=len(companies), companies=companies)
+
+
+@app.delete("/watchlist/{company_id}", dependencies=_auth, response_model=WatchedCompany)
+def unwatch_company(company_id: int):
+    """Stop polling a board; it stays listed as inactive and can be re-added."""
+    cfg = _get_cfg()
+    with db.get_conn(cfg.paths.db_path) as conn:
+        if not db.get_watched_company(conn, company_id):
+            raise HTTPException(status_code=404, detail=f"Watched company {company_id} not found")
+        db.deactivate_watched_company(conn, company_id)
+        row = db.get_watched_company(conn, company_id)
+    audit("watchlist_remove", company=row["name"], ats=row["ats"], slug=row["slug"])
+    return WatchedCompany(**dict(row))
 
 
 @app.post("/scrape", dependencies=_auth)

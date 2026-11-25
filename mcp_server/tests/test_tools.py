@@ -6,19 +6,22 @@ from mcp import Client
 from mcp_types import ElicitResult
 
 from applai_mcp.server import create_server
-from conftest import COMMIT, COMMITTED, DRAFT_ID, JD, body, call, call_error, draft, job, resolve_response
+from conftest import (
+    COMMIT, COMMITTED, DRAFT_ID, JD, body, call, call_error, candidate, draft, job, resolve_response, watched,
+)
 
 pytestmark = pytest.mark.anyio
 
 READ_ONLY_TOOLS = {"get_scoring_context", "check_duplicate", "list_applications", "get_stats", "get_pipeline_run",
-                   "get_application", "get_generation_context"}
+                   "get_application", "get_generation_context", "list_watched_companies"}
 GATED_TOOLS = {"generate_application", "run_pipeline_phase"}
+STORE_TOOLS = {"list_jobs_to_score", "record_scores", "draft_application", "watch_company", "unwatch_company"}
 
 
 async def test_tool_catalogue_and_annotations(make_client):
     async with make_client() as client:
         tools = {t.name: t for t in (await client.list_tools()).tools}
-    assert set(tools) == READ_ONLY_TOOLS | GATED_TOOLS | {"list_jobs_to_score", "record_scores", "draft_application"}
+    assert set(tools) == READ_ONLY_TOOLS | GATED_TOOLS | STORE_TOOLS
     for name in READ_ONLY_TOOLS:
         assert tools[name].annotations.read_only_hint is True
     for name in tools.keys() - READ_ONLY_TOOLS:
@@ -89,6 +92,53 @@ class TestBatchScoring:
         async with make_client() as client:
             await call_error(client, "record_scores", {"scores": scores})
         assert fake_api.requests == []
+
+
+class TestWatchlist:
+    async def test_board_found_on_the_careers_page_is_watched_directly(self, make_client, fake_api):
+        fake_api.routes["POST /watchlist/detect"] = {"candidates": [candidate()]}
+        fake_api.routes["POST /watchlist"] = {"company": watched(careers_url="https://helsing.ai/careers"),
+                                              "added": True, "job_count": 176, "sample_titles": ["AI Research Engineer"]}
+        async with make_client() as client:
+            out = await call(client, "watch_company", {"name": "Helsing", "careers_url": "https://helsing.ai/careers"})
+        assert body(fake_api.calls("POST /watchlist/detect")[0]) == {"name": "Helsing", "careers_url": "https://helsing.ai/careers"}
+        assert body(fake_api.calls("POST /watchlist")[0]) == {
+            "name": "Helsing", "ats": "greenhouse", "slug": "helsing", "careers_url": "https://helsing.ai/careers"}
+        assert out["watched"]["company"]["id"] == 1 and "176 jobs" in out["next_step"]
+
+    async def test_guessed_boards_need_confirmation(self, make_client, fake_api):
+        fake_api.routes["POST /watchlist/detect"] = {"candidates": [
+            candidate(ats="personio", slug="amazon", found_by="guess", job_count=3)]}
+        async with make_client() as client:
+            out = await call(client, "watch_company", {"name": "Amazon"})
+        assert out["watched"] is None and out["candidates"][0]["slug"] == "amazon"
+        assert "different company" in out["next_step"]
+        assert fake_api.calls("POST /watchlist") == []
+
+    async def test_no_board_found(self, make_client, fake_api):
+        fake_api.routes["POST /watchlist/detect"] = {"candidates": []}
+        async with make_client() as client:
+            out = await call(client, "watch_company", {"name": "SAP"})
+        assert out["watched"] is None and "careers page URL" in out["next_step"]
+
+    async def test_confirmed_board_skips_detection(self, make_client, fake_api):
+        fake_api.routes["POST /watchlist"] = {"company": watched(), "added": False, "job_count": 176, "sample_titles": []}
+        async with make_client() as client:
+            await call(client, "watch_company", {"name": "Helsing", "ats": "greenhouse", "slug": "helsing"})
+            assert "both ats and slug" in await call_error(client, "watch_company", {"name": "Helsing", "ats": "lever"})
+            await call_error(client, "watch_company", {"name": "X", "ats": "taleo", "slug": "x"})
+            await call_error(client, "watch_company", {"name": "X", "ats": "personio", "slug": "evil.com/#"})
+        assert fake_api.calls("POST /watchlist/detect") == [] and len(fake_api.calls("POST /watchlist")) == 1
+
+    async def test_list_and_unwatch(self, make_client, fake_api):
+        fake_api.routes["GET /watchlist"] = {"count": 1, "companies": [watched(last_job_count=176, last_relevant_count=8)]}
+        fake_api.routes["DELETE /watchlist/1"] = watched(active=False)
+        async with make_client() as client:
+            listed = await call(client, "list_watched_companies", {"include_inactive": True})
+            removed = await call(client, "unwatch_company", {"company_id": 1})
+        assert listed["count"] == 1 and listed["companies"][0]["last_relevant_count"] == 8
+        assert fake_api.calls("GET /watchlist")[0].url.params["include_inactive"] == "true"
+        assert removed["active"] is False
 
 
 class TestCheckDuplicate:
