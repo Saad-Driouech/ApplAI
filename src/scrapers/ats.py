@@ -30,6 +30,8 @@ log = get_logger(__name__)
 Get = Callable[..., httpx.Response]
 
 ATS_NAMES = ("greenhouse", "lever", "ashby", "smartrecruiters", "personio", "recruitee", "workable")
+# Workable answers bulk lookups with HTTP 429, so its boards are only found from links, never guessed
+GUESSABLE_ATS = tuple(a for a in ATS_NAMES if a != "workable")
 
 # Slugs end up in URLs (and as subdomains for Personio and Recruitee), so no dots, slashes or '@'
 _SLUG = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$")
@@ -343,7 +345,7 @@ def detect_ats(get: Get, name: str, careers_url: Optional[str] = None,
         candidates = _probe_all(get, candidates[:5])
         if any(c.job_count for c in candidates):
             return candidates
-    guesses = [Candidate(ats, slug, "guess") for slug in guess_slugs(name) for ats in ATS_NAMES]
+    guesses = [Candidate(ats, slug, "guess") for slug in guess_slugs(name) for ats in GUESSABLE_ATS]
     return candidates + [c for c in _probe_all(get, guesses) if c.job_count or c.error]
 
 

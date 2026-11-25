@@ -189,6 +189,8 @@ class TestDetection:
         })
         candidates = detect_ats(get, "telli")
         assert [(c.ats, c.slug, c.found_by) for c in candidates] == [("ashby", "telli", "guess")]
+        # Workable rate-limits bulk lookups, so it is never guessed
+        assert not any("workable" in url for url, _ in get.calls)
 
 
 class TestSeedWatchlist:
