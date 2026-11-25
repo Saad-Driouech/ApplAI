@@ -63,6 +63,7 @@ def _build_scrapers(cfg, db_path: Path) -> list:
     from src.scrapers.englishjobs import EnglishJobsScraper
     from src.scrapers.remotive import RemotiveScraper
     from src.scrapers.remoteok import RemoteOKScraper
+    from src.scrapers.watchlist import WatchlistScraper
 
     scrapers = []
 
@@ -77,6 +78,8 @@ def _build_scrapers(cfg, db_path: Path) -> list:
     scrapers.append(RemotiveScraper(db_path))
     # RemoteOK: remote tech jobs globally, free public JSON API
     scrapers.append(RemoteOKScraper(db_path))
+    # Company watchlist: public ATS job boards (Greenhouse, Lever, Ashby, ...) of watched companies
+    scrapers.append(WatchlistScraper(db_path))
 
     # Adzuna: broad coverage across DE/AE/NL/CH, free API key required
     if cfg.adzuna.enabled:

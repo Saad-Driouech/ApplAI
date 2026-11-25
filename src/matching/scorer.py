@@ -42,7 +42,7 @@ _AI_KEYWORDS = {
     "prompt engineering", "mlops", "aiops", "data science",
     "data scientist", "ml engineer", "ai engineer", "applied scientist",
     "research scientist", "ai researcher", "künstliche intelligenz", "künstlicher intelligenz",
-    "forward deployed",
+    "forward deployed", "ml", "research engineer", "perception", "agentic",
     # Frameworks and libraries
     "pytorch", "tensorflow", "keras", "scikit-learn", "sklearn",
     "hugging face", "huggingface", "langchain", "llamaindex",
@@ -61,6 +61,7 @@ _AI_KEYWORDS = {
 # (most postings now mention "AI" in passing); they still count in the title.
 _TITLE_ONLY_KEYWORDS = {
     "ai", "dl", "ki", "pandas", "numpy", "scipy", "matplotlib", "airflow", "databricks", "forward deployed",
+    "ml", "research engineer", "perception",
 }
 
 

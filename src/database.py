@@ -22,7 +22,7 @@ from src.logger import get_logger
 log = get_logger(__name__)
 
 # Bump this when the schema changes.
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 # Failed attempts at the current stage (scoring or generation) before a job is marked 'failed'
 MAX_ATTEMPTS = 3
@@ -151,6 +151,25 @@ _MIGRATIONS = {
     11: [
         # Remote roles were tagged with an assumed DE
         "UPDATE jobs SET country = 'REMOTE' WHERE country = 'DE' AND lower(city) LIKE 'remote%'",
+    ],
+    12: [
+        # Companies whose public ATS job board the watchlist scraper polls
+        """
+        CREATE TABLE IF NOT EXISTS watched_companies (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            name                TEXT NOT NULL,
+            ats                 TEXT NOT NULL,
+            slug                TEXT NOT NULL,
+            careers_url         TEXT,
+            active              INTEGER NOT NULL DEFAULT 1,
+            added_at            TEXT NOT NULL,
+            last_checked_at     TEXT,
+            last_job_count      INTEGER,
+            last_relevant_count INTEGER,
+            last_error          TEXT,
+            UNIQUE(ats, slug)
+        )
+        """,
     ],
 }
 
@@ -653,6 +672,60 @@ def finish_scrape_run(
         WHERE id = ?
         """,
         (_now(), jobs_found, jobs_new, error, run_id),
+    )
+
+
+# ── Watchlist helpers ─────────────────────────────────────────────────────
+
+
+def add_watched_company(
+    conn: sqlite3.Connection, name: str, ats: str, slug: str, careers_url: Optional[str] = None,
+) -> tuple[int, bool]:
+    """Watch a company's board, reactivating it if it was unwatched. Returns (id, newly added)."""
+    row = conn.execute("SELECT id FROM watched_companies WHERE ats = ? AND slug = ?", (ats, slug)).fetchone()
+    if row:
+        conn.execute(
+            "UPDATE watched_companies SET active = 1, name = ?, careers_url = COALESCE(?, careers_url) WHERE id = ?",
+            (name, careers_url, row["id"]),
+        )
+        return row["id"], False
+    cursor = conn.execute(
+        "INSERT INTO watched_companies (name, ats, slug, careers_url, added_at) VALUES (?, ?, ?, ?, ?)",
+        (name, ats, slug, careers_url, _now()),
+    )
+    return cursor.lastrowid, True  # type: ignore[return-value]
+
+
+def list_watched_companies(conn: sqlite3.Connection, active_only: bool = True) -> list[sqlite3.Row]:
+    sql = "SELECT * FROM watched_companies"
+    if active_only:
+        sql += " WHERE active = 1"
+    return conn.execute(sql + " ORDER BY name COLLATE NOCASE").fetchall()
+
+
+def get_watched_company(conn: sqlite3.Connection, company_id: int) -> Optional[sqlite3.Row]:
+    return conn.execute("SELECT * FROM watched_companies WHERE id = ?", (company_id,)).fetchone()
+
+
+def deactivate_watched_company(conn: sqlite3.Connection, company_id: int) -> bool:
+    cursor = conn.execute("UPDATE watched_companies SET active = 0 WHERE id = ? AND active = 1", (company_id,))
+    return cursor.rowcount > 0
+
+
+def record_watch_check(
+    conn: sqlite3.Connection, company_id: int, job_count: Optional[int], relevant_count: Optional[int],
+    error: Optional[str] = None,
+) -> None:
+    """Store the outcome of polling one board; counts are kept from the last success when it failed."""
+    conn.execute(
+        """
+        UPDATE watched_companies
+        SET last_checked_at = ?, last_error = ?,
+            last_job_count = COALESCE(?, last_job_count),
+            last_relevant_count = COALESCE(?, last_relevant_count)
+        WHERE id = ?
+        """,
+        (_now(), error, job_count, relevant_count, company_id),
     )
 
 

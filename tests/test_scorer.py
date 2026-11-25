@@ -269,11 +269,12 @@ class TestIsExcludedTitle:
 class TestTitleIsRelevant:
     @pytest.mark.parametrize("title", [
         "Machine Learning Engineer (m/w/d)", "Forward Deployed Engineer", "Junior Data Scientist", "KI-Entwickler",
+        "Senior ML Platform Engineer", "Research Engineer, Autonomy", "Perception Engineer", "Agentic Systems Engineer",
     ])
     def test_relevant(self, title):
         assert title_is_relevant(title) is True
 
-    @pytest.mark.parametrize("title", ["Software Engineer", "Lead Data Scientist", "Werkstudent KI", ""])
+    @pytest.mark.parametrize("title", ["Software Engineer", "Lead Data Scientist", "Werkstudent KI", "HTML Developer", ""])
     def test_not_relevant(self, title):
         assert title_is_relevant(title) is False
 
@@ -297,7 +298,7 @@ class TestScorePrompt:
     def test_guessed_country_not_asserted(self):
         from src.matching.gemini_client import build_score_prompt
         # Unknown towns default to DE; the prompt shows only what the listing says
-        assert "Location: Darmstadt\n" in build_score_prompt({"country": "DE", "city": "Darmstadt"}, "cv")
+        assert "Location: Gilching\n" in build_score_prompt({"country": "DE", "city": "Gilching"}, "cv")
         assert "Location: DE\n" in build_score_prompt({"country": "DE", "city": ""}, "cv")
 
     def test_prompt_treats_profile_constraints_as_blockers(self):

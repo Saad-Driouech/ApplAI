@@ -334,6 +334,46 @@ class TestRemoteCountryMigration:
             "Remote": "REMOTE", "Remote · Worldwide": "REMOTE", "Berlin": "DE"}
 
 
+class TestWatchlist:
+    def test_v12_creates_the_table_on_an_existing_database(self):
+        conn, path = _db()
+        conn.execute("DROP TABLE watched_companies")
+        conn.execute("DELETE FROM schema_meta WHERE version >= 12")
+        conn.commit()
+        conn = init_db(path)
+        assert conn.execute("SELECT COUNT(*) FROM watched_companies").fetchone()[0] == 0
+
+    def test_add_list_deactivate_and_reactivate(self):
+        from src.database import add_watched_company, deactivate_watched_company, list_watched_companies
+
+        conn, _ = _db()
+        cid, new = add_watched_company(conn, "Helsing", "greenhouse", "helsing", "https://helsing.ai/jobs")
+        assert new is True
+        add_watched_company(conn, "DeepL", "ashby", "deepl")
+        assert [r["name"] for r in list_watched_companies(conn)] == ["DeepL", "Helsing"]
+
+        assert deactivate_watched_company(conn, cid) is True
+        assert deactivate_watched_company(conn, cid) is False
+        assert [r["name"] for r in list_watched_companies(conn)] == ["DeepL"]
+        assert len(list_watched_companies(conn, active_only=False)) == 2
+
+        again, new = add_watched_company(conn, "Helsing AI", "greenhouse", "helsing")
+        assert (again, new) == (cid, False)
+        row = [r for r in list_watched_companies(conn) if r["id"] == cid][0]
+        assert row["name"] == "Helsing AI" and row["careers_url"] == "https://helsing.ai/jobs"
+
+    def test_failed_check_keeps_the_last_counts(self):
+        from src.database import add_watched_company, get_watched_company, record_watch_check
+
+        conn, _ = _db()
+        cid, _ = add_watched_company(conn, "Helsing", "greenhouse", "helsing")
+        record_watch_check(conn, cid, 175, 12)
+        record_watch_check(conn, cid, None, None, "HTTPStatusError: 404")
+        row = get_watched_company(conn, cid)
+        assert (row["last_job_count"], row["last_relevant_count"]) == (175, 12)
+        assert row["last_error"] == "HTTPStatusError: 404" and row["last_checked_at"]
+
+
 class TestFeedback:
     def test_record_and_retrieve_feedback_event(self):
         import uuid

@@ -213,7 +213,7 @@ def test_remote_flag_location():
 
 
 @pytest.mark.parametrize("location,code,expected", [
-    ("Berlin", "DE", True), ("Darmstadt", "DE", False), ("Lyon 🇫🇷", "DE", False),
+    ("Berlin", "DE", True), ("Darmstadt", "DE", True), ("Gilching", "DE", False), ("Lyon 🇫🇷", "DE", False),
     ("Bern", "CH", True), ("Rotterdam, Zuid-Holland, Nederland", "NL", True), ("Gilching 🇩🇪", "DE", True),
 ])
 def test_names_country(location, code, expected):

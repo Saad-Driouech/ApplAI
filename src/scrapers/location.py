@@ -11,7 +11,11 @@ _REGION_TERMS = ("worldwide", "anywhere", "global", "europe", "european union", 
 
 _COUNTRY_TERMS = {
     "DE": ("germany", "deutschland", "berlin", "munich", "münchen", "hamburg",
-           "frankfurt", "cologne", "köln", "nuremberg", "nürnberg", "stuttgart"),
+           "frankfurt", "cologne", "köln", "nuremberg", "nürnberg", "stuttgart",
+           "düsseldorf", "dusseldorf", "leipzig", "dresden", "hanover", "hannover", "bremen", "dortmund", "essen",
+           "bonn", "karlsruhe", "mannheim", "heidelberg", "darmstadt", "aachen", "ulm", "erlangen", "regensburg",
+           "ingolstadt", "augsburg", "freiburg", "potsdam", "wiesbaden", "mainz", "kiel", "jena", "tübingen",
+           "wolfsburg", "heilbronn", "garching", "oberkochen", "bavaria", "bayern"),
     "NL": ("netherlands", "nederland", "holland", "amsterdam", "rotterdam", "utrecht", "eindhoven",
            "den haag", "the hague", "leiden", "delft", "haarlem", "groningen", "hertogenbosch", "schiphol",
            "noord-brabant", "zuid-holland", "noord-holland", "overijssel", "gelderland"),
@@ -100,3 +104,16 @@ def infer_onsite_country(location: str | None) -> str:
     if "remote" in words and not words - _FILLER:
         return REMOTE
     return HOME_COUNTRY
+
+
+TARGET_COUNTRIES = frozenset(_COUNTRY_TERMS)
+
+
+def infer_country(location: str | None, remote: bool = False) -> str:
+    """Country for an employer with offices anywhere: unrecognised places are OUTSIDE_TARGETS, not DE."""
+    if remote or "remote" in re.findall(r"\w+", (location or "").lower()):
+        return infer_remote_country(location)
+    country = infer_onsite_country(location)
+    if country == HOME_COUNTRY and not names_country(location, HOME_COUNTRY):
+        return OUTSIDE_TARGETS
+    return country
