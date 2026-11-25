@@ -14,7 +14,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterator, Optional
-from xml.etree.ElementTree import Element  # nosec B405 - type only; parsing uses defusedxml
+# Imported for the type only; all parsing goes through defusedxml
+from xml.etree.ElementTree import Element  # nosec B405
 
 import defusedxml.ElementTree as SafeET
 import httpx
