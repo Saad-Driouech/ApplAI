@@ -11,6 +11,7 @@ data/db/*.db-journal
 data/db/*.db-wal
 data/db/*.db-shm
 data/db/*.lock
+data/db/*.json
 data/n8n/
 data/logs/
 
