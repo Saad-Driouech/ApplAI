@@ -17,6 +17,7 @@ Endpoints:
 
 Claude-authored flow (Claude scores and writes through the MCP server, ApplAI stores and renders):
   POST /jobs/resolve          — fetch/sanitize a posting and report filters and duplicates
+  POST /jobs/ingest           — add jobs Claude found (pasted, web search, job alerts) as 'new'
   GET  /scoring/context       — rubric, profile, learned preferences and threshold
   POST /jobs/prefilter        — expire stale jobs and auto-skip 'new' jobs failing a pre-filter
   GET  /jobs/to-score         — 'new' jobs with sanitized descriptions
@@ -71,6 +72,10 @@ from src.api_models import (
     GenerateRequest,
     GenerateResponse,
     GenerationContext,
+    IngestItem,
+    IngestOutcome,
+    IngestRequest,
+    IngestResponse,
     JobInput,
     JobDetail,
     JobListResponse,
@@ -95,7 +100,14 @@ from src.documents.cover_letter import CL_RULES, CoverLetterError
 from src.documents.cv_generator import CV_RULES, CVGenerationError, CVGenerator
 from src.matching.gemini_client import SCORING_RUBRIC, location_text
 from src.matching.response_parser import ScoreResult
-from src.matching.scorer import apply_score, has_ai_keywords, is_excluded_title, prefilter_new_jobs
+from src.matching.scorer import (
+    MCP_SOURCE,
+    apply_score,
+    has_ai_keywords,
+    is_excluded_title,
+    prefilter_new_jobs,
+    prefilter_reason,
+)
 from src.pipeline import (
     LLMDisabled,
     build_generators,
@@ -111,7 +123,7 @@ from src.pipeline import (
     score_single_job,
 )
 from src.scrapers import ats
-from src.scrapers.single_url import JobFetchError, _download, fetch_job_posting
+from src.scrapers.single_url import JobFetchError, _download, fetch_job_posting, linkedin_job_id
 from src.utils.jd_sanitizer import sanitize_jd
 from src.utils.locks import PhaseBusy, phase_lock
 from src.utils.sanitize import sanitize_job
@@ -221,21 +233,18 @@ def scrape_runs():
 
 _JOB_STATUSES = r"^(new|queued|generating|ready|delivered|approved|rejected|skipped|failed)$"
 _DONE_STATUSES = {"generating", "ready", "delivered", "approved", "rejected"}
-MCP_SOURCE = "mcp"
 
 
-def _resolve_job(req: JobInput) -> tuple[dict, list[str]]:
+class JobBlocked(ValueError):
+    """The job description failed the prompt-injection filter."""
+
+
+def _resolve_posting(req: JobInput) -> tuple[dict, list[str]]:
     """
     Sanitized job dict from pasted text or a fetched URL (explicit fields override fetched ones),
-    plus the JD sanitizer flags. Severe prompt injection is rejected with 422.
+    plus the JD sanitizer flags. Raises JobFetchError or JobBlocked.
     """
-    if req.url:
-        try:
-            raw = fetch_job_posting(req.url)
-        except JobFetchError as exc:
-            raise HTTPException(status_code=422, detail=str(exc))
-    else:
-        raw = {"description": req.description}
+    raw = fetch_job_posting(req.url) if req.url else {"description": req.description}
     for field in ("title", "company", "city", "country"):
         if getattr(req, field):
             raw[field] = getattr(req, field)
@@ -246,11 +255,16 @@ def _resolve_job(req: JobInput) -> tuple[dict, list[str]]:
 
     flags = sanitize_jd(job["description"])
     if flags["blocked"]:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Job description blocked by the prompt-injection filter ({', '.join(flags['flags'])})",
-        )
+        raise JobBlocked(f"Job description blocked by the prompt-injection filter ({', '.join(flags['flags'])})")
     return job, flags["flags"]
+
+
+def _resolve_job(req: JobInput) -> tuple[dict, list[str]]:
+    """_resolve_posting with fetch failures and severe prompt injection as 422."""
+    try:
+        return _resolve_posting(req)
+    except (JobFetchError, JobBlocked) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
 
 _LLM_DISABLED = "The LLM pipeline is disabled (no API key); Claude scores and writes through the MCP server"
@@ -373,6 +387,57 @@ def _queue_new(cfg, req: JobInput) -> dict:
     job = _resolve_new(cfg, req)  # before spending an LLM call
     # Score before inserting so the row is never visible to phase_score as 'new'
     return _insert_new(cfg, job, _score(cfg, job))
+
+
+def _ingest_one(cfg, index: int, item: IngestItem, skip_linkedin: bool) -> IngestOutcome:
+    from src.scrapers.base import _job_id
+
+    if skip_linkedin and item.url and linkedin_job_id(item.url):
+        return IngestOutcome(index=index, status="needs_text", title=item.title, company=item.company,
+                             reason="Not tried: LinkedIn refused an earlier job in this batch (likely rate-limited); "
+                                    "find the employer's own posting or paste the job description text")
+    try:
+        job, _ = _resolve_posting(item)
+    except JobFetchError as exc:
+        return IngestOutcome(index=index, status="needs_text", title=item.title, company=item.company, reason=str(exc))
+    except JobBlocked as exc:
+        return IngestOutcome(index=index, status="rejected", title=item.title, company=item.company, reason=str(exc))
+    outcome = IngestOutcome(index=index, status="rejected", title=job["title"], company=job["company"])
+    if not (job["title"] and job["company"]):
+        return outcome.model_copy(update={"reason": "'title' and 'company' are required"})
+    if not re.fullmatch(COUNTRY_PATTERN, job["country"]):
+        return outcome.model_copy(update={"reason": "'country' must be an ISO alpha-2 code or REMOTE"})
+
+    job.update(id=_job_id(MCP_SOURCE, job["external_id"]), source=MCP_SOURCE)
+    with db.get_conn(cfg.paths.db_path) as conn:
+        originals = db.find_by_dedup_key(conn, job["company"], job["title"])
+        if originals or db.job_exists(conn, MCP_SOURCE, job["external_id"]):
+            return outcome.model_copy(update={"status": "duplicate",
+                                              "existing_job_id": originals[0]["id"] if originals else job["id"]})
+        skip = prefilter_reason(job, cfg.allowed_countries)
+        if skip and not item.keep:
+            return outcome.model_copy(update={"status": "filtered", "reason": skip[1]})
+        db.upsert_job(conn, job)
+    return outcome.model_copy(update={"status": "inserted", "job_id": job["id"]})
+
+
+@app.post("/jobs/ingest", dependencies=_auth, response_model=IngestResponse)
+def ingest_jobs(req: IngestRequest):
+    """
+    Add jobs found outside the scrapers as 'new', for scoring with the scraped ones. Each job is
+    resolved, de-duplicated and pre-filtered on its own; one bad job does not fail the batch.
+    """
+    cfg = _get_cfg()
+    results: list[IngestOutcome] = []
+    linkedin_limited = False
+    for index, item in enumerate(req.jobs):
+        outcome = _ingest_one(cfg, index, item, skip_linkedin=linkedin_limited)
+        # After one rate-limited LinkedIn request, more would only extend the block
+        linkedin_limited |= outcome.status == "needs_text" and bool(item.url and linkedin_job_id(item.url))
+        results.append(outcome)
+    inserted = sum(r.status == "inserted" for r in results)
+    audit("jobs_ingested", requested=len(req.jobs), inserted=inserted)
+    return IngestResponse(inserted=inserted, results=results)
 
 
 @app.post("/jobs/generate", dependencies=_auth, response_model=GenerateResponse)

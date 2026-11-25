@@ -43,6 +43,7 @@ MIRRORS: dict[type[BaseModel], type[BaseModel]] = {
     models.GenerationContext: api.GenerationContext,
     models.Draft: api.DraftResponse,
     models.GenerateResult: api.GenerateResponse,
+    models.IngestOutcome: api.IngestOutcome,
     models.BoardCandidate: api.BoardCandidate,
     models.WatchedCompany: api.WatchedCompany,
     models.WatchResult: api.WatchResponse,
@@ -90,7 +91,7 @@ def test_mirror_matches_api_model(mirror):
 @pytest.mark.parametrize("model,key", [
     (api.JobsToScoreResponse, "jobs"), (api.ScoresResponse, "results"),
     (api.DuplicatesResponse, "matches"), (api.JobListResponse, "jobs"),
-    (api.DetectResponse, "candidates"), (api.WatchlistResponse, "companies"),
+    (api.DetectResponse, "candidates"), (api.WatchlistResponse, "companies"), (api.IngestResponse, "results"),
 ], ids=lambda v: v if isinstance(v, str) else v.__name__)
 def test_envelope_keys_the_client_unwraps(model, key):
     assert key in model.model_fields
@@ -144,6 +145,14 @@ class TestRequestBodies:
             await call(client, "record_scores", {"scores": [
                 {"job_id": "j1", "score": 7.5, "reasoning": "fit", "is_job_posting": True, "scored_by": "claude"}]})
         _assert_known_fields(api.ScoresRequest, body(fake_api.calls("POST /jobs/scores")[0]))
+
+    async def test_add_jobs(self, make_client, fake_api):
+        fake_api.routes["POST /jobs/ingest"] = {"inserted": 0, "results": []}
+        async with make_client() as client:
+            await call(client, "add_jobs", {"jobs": [
+                {"jd_text": JD, "title": "AI Engineer", "company": "Acme", "country": "de", "city": "Berlin"},
+                {"url": "https://jobs.example.com/1", "keep": True}]})
+        _assert_known_fields(api.IngestRequest, body(fake_api.calls("POST /jobs/ingest")[0]))
 
     async def test_watchlist(self, make_client, fake_api):
         fake_api.routes["POST /watchlist/detect"] = {"candidates": [candidate()]}

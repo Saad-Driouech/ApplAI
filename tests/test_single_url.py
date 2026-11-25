@@ -114,3 +114,55 @@ class TestParsing:
         serve(_html("<main>Sign in to see this job</main>"))
         with pytest.raises(JobFetchError, match="paste the job description"):
             fetch_job_posting("https://jobs.example.com/1")
+
+
+_LINKEDIN_CARD = (
+    '<section class="top-card-layout"><h2 class="top-card-layout__title topcard__title">Senior AI Engineer (w/m/d)</h2>'
+    '<a class="topcard__org-name-link topcard__flavor--black-link" href="#">Eraneos</a>'
+    '<span class="topcard__flavor topcard__flavor--bullet">Greater Munich Metropolitan Area</span></section>'
+    f'<div class="description__text description__text--rich"><div class="show-more-less-html__markup">'
+    f'<p>{DESC}</p></div></div>'
+)
+
+
+class TestLinkedIn:
+    @pytest.mark.parametrize("url,job_id", [
+        ("https://www.linkedin.com/jobs/view/4448028473/", "4448028473"),
+        ("https://de.linkedin.com/jobs/view/senior-ai-engineer-at-eraneos-4448028473?trk=public", "4448028473"),
+        ("https://www.linkedin.com/comm/jobs/view/4448028473/?trackingId=abc%3D%3D&refId=x", "4448028473"),
+        ("https://www.linkedin.com/jobs/search/?currentJobId=4448028473&keywords=ai", "4448028473"),
+        ("https://www.linkedin.com/in/someone/", None),
+        ("https://evil.example/www.linkedin.com/jobs/view/4448028473/", None),
+        ("https://linkedin.com.evil.example/jobs/view/4448028473/", None),
+    ])
+    def test_job_id(self, url, job_id):
+        assert single_url.linkedin_job_id(url) == job_id
+
+    def test_alert_link_is_read_from_the_guest_endpoint(self, serve, monkeypatch):
+        monkeypatch.setitem(HOSTS, "www.linkedin.com", "13.107.42.14")
+        seen = []
+
+        def handler(request):
+            seen.append(str(request.url))
+            return httpx.Response(200, text=f"<html><body>{_LINKEDIN_CARD}</body></html>")
+
+        serve(handler)
+        job = fetch_job_posting("https://www.linkedin.com/comm/jobs/view/4448028473/?trackingId=abc")
+
+        assert seen == ["https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/4448028473"]
+        assert (job["title"], job["company"], job["country"]) == ("Senior AI Engineer (w/m/d)", "Eraneos", "DE")
+        assert job["city"] == "Greater Munich Metropolitan Area" and job["description"].startswith("Build retrieval")
+        assert job["external_id"] == "linkedin:4448028473"
+        assert job["source_url"] == "https://www.linkedin.com/jobs/view/4448028473/"
+
+    @pytest.mark.parametrize("response", [
+        httpx.Response(429, text=""),
+        httpx.Response(200, text="<html><body><main>Sign in to view</main></body></html>"),
+    ])
+    def test_rate_limit_or_login_wall_asks_for_the_employer_posting(self, serve, monkeypatch, response):
+        monkeypatch.setitem(HOSTS, "www.linkedin.com", "13.107.42.14")
+        calls = []
+        serve(lambda request: calls.append(request) or response)
+        with pytest.raises(JobFetchError, match="employer's own posting"):
+            fetch_job_posting("https://www.linkedin.com/jobs/view/4448028473/")
+        assert len(calls) == 1

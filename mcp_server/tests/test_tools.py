@@ -15,7 +15,8 @@ pytestmark = pytest.mark.anyio
 READ_ONLY_TOOLS = {"get_scoring_context", "check_duplicate", "list_applications", "get_stats", "get_pipeline_run",
                    "get_application", "get_generation_context", "list_watched_companies"}
 GATED_TOOLS = {"generate_application", "run_pipeline_phase"}
-STORE_TOOLS = {"list_jobs_to_score", "record_scores", "draft_application", "watch_company", "unwatch_company"}
+STORE_TOOLS = {"list_jobs_to_score", "record_scores", "draft_application", "watch_company", "unwatch_company",
+               "add_jobs"}
 
 
 async def test_tool_catalogue_and_annotations(make_client):
@@ -91,6 +92,34 @@ class TestBatchScoring:
     async def test_record_scores_validated(self, make_client, fake_api, scores):
         async with make_client() as client:
             await call_error(client, "record_scores", {"scores": scores})
+        assert fake_api.requests == []
+
+
+class TestAddJobs:
+    async def test_sends_each_job_and_counts_outcomes(self, make_client, fake_api):
+        fake_api.routes["POST /jobs/ingest"] = {"inserted": 1, "results": [
+            {"index": 0, "status": "inserted", "job_id": "m1", "title": "AI Engineer", "company": "Acme"},
+            {"index": 1, "status": "needs_text", "reason": "LinkedIn did not return job 1 (HTTP 429)"},
+            {"index": 2, "status": "filtered", "title": "Lead AI Engineer", "company": "B", "reason": "Auto-skipped"}]}
+        jobs = [{"jd_text": JD, "title": "AI Engineer", "company": "Acme", "country": "de"},
+                {"url": "https://www.linkedin.com/comm/jobs/view/1234567/", "company": "LinkedIn Co"},
+                {"url": "https://jobs.example.com/2", "keep": True}]
+        async with make_client() as client:
+            out = await call(client, "add_jobs", {"jobs": jobs})
+        sent = body(fake_api.calls("POST /jobs/ingest")[0])["jobs"]
+        assert sent[0] == {"description": JD, "title": "AI Engineer", "company": "Acme", "country": "DE", "keep": False}
+        assert sent[1] == {"url": "https://www.linkedin.com/comm/jobs/view/1234567/", "company": "LinkedIn Co", "keep": False}
+        assert sent[2]["keep"] is True
+        assert (out["inserted"], out["needs_text"], out["filtered"], out["duplicates"]) == (1, 1, 1, 0)
+        assert "employer's own posting" in out["next_step"]
+
+    @pytest.mark.parametrize("jobs", [
+        [], [{"title": "no source"}], [{"jd_text": JD, "url": "https://jobs.example.com/1"}],
+        [{"url": "http://jobs.example.com/1"}], [{"jd_text": JD}] * 26,
+    ])
+    async def test_validated_before_calling_applai(self, make_client, fake_api, jobs):
+        async with make_client() as client:
+            await call_error(client, "add_jobs", {"jobs": jobs})
         assert fake_api.requests == []
 
 

@@ -25,12 +25,13 @@ profile and threshold; score with them and store batch scores with record_scores
 Documents: get_generation_context, then write the tailored CV LaTeX and cover letter body following its
 rules, then draft_application and fix any reported problems. generate_application turns the draft into
 an application and sends it to Discord for the user's approval.
-Sources: watch_company adds a company's public job board, which every scrape then reads
-(list_watched_companies, unwatch_company).
+Sources: add_jobs adds jobs you found (pasted links, web search, job alert emails) for scoring;
+watch_company adds a company's public job board, which every scrape then reads (list_watched_companies,
+unwatch_company).
 For the state of the search use list_applications, get_stats, check_duplicate and get_application. For
 interview prep or follow-ups, combine get_application with the Gmail and Google Calendar connectors
-(read only) and web search. The apply_to_job, daily_run, interview_prep and application_status prompts
-describe the steps.
+(read only) and web search. The apply_to_job, daily_run, import_job_alerts, interview_prep and
+application_status prompts describe the steps.
 generate_application and run_pipeline_phase always ask for confirmation first. If a call returns status
 'confirmation_required', show the preview to the user and only repeat the call with the
 confirmation_token after they approve.

@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated, Any, Generic, Literal, Optional, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 T = TypeVar("T")
 
@@ -15,7 +15,8 @@ Country = Annotated[str, Field(pattern=r"^(?:[A-Za-z]{2}|REMOTE|remote)$",
                                description="ISO 3166-1 alpha-2 code (DE, AE, CH...) or REMOTE")]
 JdText = Annotated[str, Field(min_length=50, max_length=50_000, description="Full job description text")]
 JobUrl = Annotated[str, Field(pattern=r"^https://", max_length=2000,
-                              description="Public https URL of the posting (login-walled pages like LinkedIn fail)")]
+                              description="Public https URL of the posting (LinkedIn job links work until LinkedIn "
+                                          "rate-limits; other login-walled pages fail)")]
 Company = Annotated[str, Field(min_length=1, max_length=150, description="Company name")]
 Title = Annotated[str, Field(min_length=1, max_length=200, description="Job title")]
 ConfirmationToken = Annotated[str, Field(
@@ -41,6 +42,24 @@ class ScoreInput(BaseModel):
 
 class JobScoreInput(ScoreInput):
     job_id: JobId
+
+
+class NewJob(BaseModel):
+    """A job you found (pasted, on the web, in a job alert email): exactly one of jd_text or url."""
+
+    jd_text: Optional[JdText] = None
+    url: Optional[JobUrl] = None
+    title: Optional[Title] = None
+    company: Optional[Company] = None
+    country: Optional[Country] = Field(None, description="Required unless the posting states an ISO country")
+    city: Optional[str] = Field(None, max_length=100)
+    keep: bool = Field(False, description="Add it even though a pre-filter rejected it; only when the user asks")
+
+    @model_validator(mode="after")
+    def _text_xor_url(self) -> "NewJob":
+        if bool(self.jd_text) == bool(self.url):
+            raise ValueError("Provide exactly one of jd_text or url")
+        return self
 
 # ── ApplAI API mirrors ────────────────────────────────────────────────────
 
@@ -166,6 +185,17 @@ class GenerateResult(_ApiModel):
                            "sends it later.")
 
 
+class IngestOutcome(_ApiModel):
+    index: int = Field(description="Position in your jobs list")
+    status: str = Field(description="inserted, duplicate, filtered (a pre-filter rejects it), needs_text (the URL "
+                                    "could not be read) or rejected")
+    job_id: Optional[str] = None
+    existing_job_id: Optional[str] = Field(None, description="The pipeline job it duplicates")
+    title: str = ""
+    company: str = ""
+    reason: Optional[str] = None
+
+
 class BoardCandidate(_ApiModel):
     ats: str
     slug: str
@@ -243,6 +273,19 @@ class JobsToScore(BaseModel):
     next_step: str = Field(
         "Score each job 0-10 with the rubric, profile and learned preferences, then store all scores with "
         "record_scores. Jobs at or above the threshold are queued for documents.")
+
+
+class JobsAdded(BaseModel):
+    inserted: int
+    duplicates: int
+    filtered: int
+    needs_text: int
+    rejected: int
+    results: list[IngestOutcome]
+    next_step: str = Field(
+        "Inserted jobs are 'new': score them with list_jobs_to_score now or let the next scheduled run do it. "
+        "For needs_text, find the employer's own posting (careers page or ATS link) with web search and add that "
+        "URL, or skip it. Tell the user which jobs were filtered and why; resend one with keep only if they ask.")
 
 
 class ScoresRecorded(BaseModel):

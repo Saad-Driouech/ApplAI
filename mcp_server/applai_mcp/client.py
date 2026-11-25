@@ -13,6 +13,7 @@ from applai_mcp.models import (
     Draft,
     GenerateResult,
     GenerationContext,
+    IngestOutcome,
     JobDetail,
     JobSummary,
     JobToScore,
@@ -53,6 +54,12 @@ class ApplAIClient:
 
     async def resolve_job(self, payload: dict[str, Any]) -> ResolvedPosting:
         return ResolvedPosting.model_validate(await self._request("POST", "/jobs/resolve", json=payload))
+
+    async def ingest(self, jobs: list[dict[str, Any]]) -> list[IngestOutcome]:
+        # Fetches each URL in turn
+        data = await self._request("POST", "/jobs/ingest", json={"jobs": jobs},
+                                   timeout=self._settings.generate_timeout_seconds)
+        return [IngestOutcome.model_validate(r) for r in data["results"]]
 
     async def scoring_context(self) -> ScoringContext:
         return ScoringContext.model_validate(await self._request("GET", "/scoring/context"))

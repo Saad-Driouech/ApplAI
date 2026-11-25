@@ -24,6 +24,9 @@ log = get_logger(__name__)
 
 _CONFIG_ERROR_STATUS = {401, 403, 404}
 
+# Source of jobs Claude added through the MCP server (pasted, found on the web, from job alerts)
+MCP_SOURCE = "mcp"
+
 # ── Keyword pre-filter ────────────────────────────────────────────────────
 # Jobs that mention NONE of these terms are auto-skipped before LLM scoring.
 # Keep this list broad — false negatives (skipping a good job) are worse than
@@ -117,13 +120,16 @@ def prefilter_reason(job: dict, allowed_countries: Optional[frozenset]) -> Optio
 
 
 def prefilter_new_jobs(db_path: Path, allowed_countries: Optional[frozenset]) -> tuple[int, list[dict]]:
-    """Skip every 'new' job a pre-filter rejects. Returns (skipped count, remaining 'new' jobs, newest first)."""
+    """
+    Skip every 'new' job a pre-filter rejects. Returns (skipped count, remaining 'new' jobs, newest first).
+    Jobs Claude added were checked when added (or kept on purpose), so they are never skipped here.
+    """
     with db.get_conn(db_path) as conn:
         jobs = [dict(r) for r in db.get_jobs_by_status(conn, "new", limit=None)]
 
     remaining, skipped = [], 0
     for job in jobs:
-        skip = prefilter_reason(job, allowed_countries)
+        skip = None if job.get("source") == MCP_SOURCE else prefilter_reason(job, allowed_countries)
         if skip is None:
             remaining.append(job)
             continue

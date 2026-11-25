@@ -71,6 +71,30 @@ Run today's ApplAI batch. This request is my approval for the confirmations it n
 
 {WRITING_RULES}"""
 
+    @server.prompt(title="Import job alerts")
+    def import_job_alerts(days: str = "2") -> str:
+        """Add the jobs from LinkedIn, StepStone, Indeed, XING and other job alert emails to ApplAI for scoring."""
+        return f"""\
+Import the jobs from my job alert emails of the last {days} days into ApplAI.
+
+1. With the Gmail connector, search for job alert emails from the last {days} days, for example:
+   newer_than:{days}d (from:jobalerts-noreply@linkedin.com OR from:jobs-noreply@linkedin.com OR from:stepstone
+   OR from:indeed OR from:xing OR subject:"job alert" OR subject:Jobagent OR subject:"new jobs")
+   Read each alert and list every job in it: title, company, location and the link to the job.
+2. Skip jobs that are obviously not for me (wrong field, internships, working-student roles, above senior) and
+   tell me how many you skipped.
+3. Call add_jobs with the rest, at most 25 per call: url set to the job link, and title, company, country
+   (ISO code or REMOTE, from the location) and city from the email. Keep the order so you can match the results.
+4. For each needs_text result, search the web for the same job on the employer's own careers page or job board
+   (Greenhouse, Lever, Ashby, Personio, ...) and add that URL with add_jobs. If you cannot find it, list the job
+   with its link so I can open it myself.
+5. Report: jobs found, added, duplicates (already in ApplAI), filtered with the reason, and jobs left for me.
+   Do not resend filtered jobs with keep unless I ask.
+6. Offer to score the new jobs now with list_jobs_to_score and record_scores; otherwise the next scheduled run
+   scores them.
+
+{RULES}"""
+
     @server.prompt(title="Interview prep")
     def interview_prep(company: str, role: str = "", when: str = "") -> str:
         """Prepare a briefing for an upcoming interview using ApplAI, Calendar, Gmail and web search."""

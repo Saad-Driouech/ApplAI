@@ -30,6 +30,33 @@ class JobInput(BaseModel):
         return self
 
 
+class IngestItem(JobInput):
+    """A job Claude found (pasted, on the web, in a job alert) to add for scoring."""
+
+    keep: bool = Field(False, description="Add it even if the location, title or AI-keyword pre-filter rejects it")
+
+
+class IngestRequest(BaseModel):
+    jobs: list[IngestItem] = Field(min_length=1, max_length=25)
+
+
+class IngestOutcome(BaseModel):
+    index: int = Field(description="Position in the request")
+    status: str = Field(description="inserted, duplicate, filtered (a pre-filter rejects it; resend with keep), "
+                                    "needs_text (the URL could not be read; send the text or the employer's posting) "
+                                    "or rejected")
+    job_id: Optional[str] = None
+    existing_job_id: Optional[str] = Field(None, description="The job it duplicates")
+    title: str = ""
+    company: str = ""
+    reason: Optional[str] = None
+
+
+class IngestResponse(BaseModel):
+    inserted: int
+    results: list[IngestOutcome]
+
+
 class JobSummary(BaseModel):
     id: str
     source: str
