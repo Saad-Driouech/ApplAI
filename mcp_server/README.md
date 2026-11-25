@@ -2,7 +2,7 @@
 
 An [MCP](https://modelcontextprotocol.io) server that lets Claude work with ApplAI and with the application folders in `job_applications/`. It runs locally over stdio for Claude Desktop, or over HTTP as a claude.ai custom connector, so it can be used from any device through any Claude client (web, mobile or desktop app) and from scheduled tasks, with sign-in through WorkOS AuthKit.
 
-**Claude does the LLM work, ApplAI does the rest.** Claude scores postings and scraped jobs with the same rubric as the pipeline's scorer, and writes the tailored CV (LaTeX) and cover letter. ApplAI scrapes job boards, stores and deduplicates jobs, compiles the documents with its sandboxed pdflatex, and delivers them to Discord for approval and to Notion. The server also checks whether you've already applied, lists and summarises applications across the pipeline database and your folders, and runs pipeline phases. Prompts cover applying to a job, the daily batch, and interview prep and status checks with the claude.ai Gmail and Google Calendar connectors and web search.
+**Claude does the LLM work, ApplAI does the rest.** Claude scores postings and scraped jobs with the same rubric as the pipeline's scorer, and writes the tailored CV (LaTeX) and cover letter. ApplAI scrapes job boards (including the boards of companies on your watchlist), stores and deduplicates jobs, compiles the documents with its sandboxed pdflatex, and delivers them to Discord for approval and to Notion. Claude can also add jobs it finds itself: pasted links, web search results and job alert emails. The server also checks whether you've already applied, lists and summarises applications across the pipeline database and your folders, and runs pipeline phases. Prompts cover applying to a job, the daily batch, importing job alerts, and interview prep and status checks with the claude.ai Gmail and Google Calendar connectors and web search.
 
 It's a thin layer on top of ApplAI. Every pipeline action goes through the ApplAI HTTP API (`X-API-Key`). The server never opens the SQLite database, and it only reads `job_applications/`. ApplAI needs no LLM keys for this flow.
 
@@ -18,7 +18,8 @@ claude.ai ──HTTPS + WorkOS token───┘        │
 | Tool | Kind | What it does |
 |---|---|---|
 | `get_scoring_context` | read | For pasted JD text, a public https URL or a pipeline `job_id`: the sanitized posting, the scoring rubric, your profile, learned preferences and the threshold, plus whether the pipeline's keyword and title filters would keep it, pipeline duplicates and your existing folders for the company. Claude scores from this. Nothing is stored. |
-| `list_jobs_to_score` | write | Runs the pipeline's free pre-filters (expiry, location, title, keywords), then returns up to 30 scraped jobs waiting for a score, with the rubric and profile once. |
+| `add_jobs` | write | Adds up to 25 jobs Claude found (pasted, web search, job alert emails) as `new`, by URL or text. Each is de-duplicated and pre-filtered: `filtered` jobs are only added when resent with `keep`, and a URL that can't be read (LinkedIn rate limits, login walls) comes back as `needs_text`. After one refused LinkedIn link, the rest of the batch's LinkedIn links aren't tried. |
+| `list_jobs_to_score` | write | Runs the pipeline's free pre-filters (expiry, location, title, keywords; jobs from `add_jobs` were checked already), then returns up to 30 jobs waiting for a score, with the rubric and profile once. |
 | `record_scores` | write | Stores up to 30 of Claude's scores. Jobs at or above the threshold become `queued`, the rest `skipped` (`low_score` or `not_a_job`). Only `new` jobs are updated. |
 | `get_generation_context` | read | The LaTeX CV template and its page limit (the CV may not be longer than the compiled template), the CV and cover letter rules (style bans, no fabrication) and your profile, plus the job when a `job_id` is given. |
 | `draft_application` | write | Compiles Claude's CV LaTeX and cover letter body into `.pending/<draft_id>/` and reports page counts and problems to fix. Takes an existing `job_id` or a new posting (with Claude's score). Nothing is registered or sent. |
@@ -29,6 +30,9 @@ claude.ai ──HTTPS + WorkOS token───┘        │
 | `run_pipeline_phase` | **write**, gated | Starts `scrape` or `deliver` in the background and returns a `run_id` straight away. `score` and `generate` use ApplAI's own LLM and only work when it has an API key. |
 | `get_pipeline_run` | read | Status and result of the runs started in this session. |
 | `get_application` | read | Everything about one application: matching folders with JD text and your `.md` prep notes, pipeline jobs with score reasoning and description, and ready-made Gmail and Calendar search queries. |
+| `watch_company` | write | Adds a company's public job board (Greenhouse, Lever, Ashby, SmartRecruiters, Personio, Recruitee or Workable) to the watchlist; every scrape then adds its AI/ML roles. A board linked from the careers URL is added directly. Boards guessed from the name come back as candidates, with job counts and sample titles, and are added only when called again with the `ats` and `slug` you confirm. |
+| `list_watched_companies` | read | Watched boards with the jobs found at the last read (all and AI/ML relevant) and the last error. |
+| `unwatch_company` | write | Stops reading a board; its jobs stay in the pipeline. |
 
 Folder stages:
 - `researching`: JD only.
@@ -46,14 +50,15 @@ In Claude Desktop, use **+ → applai**, or ask for a prompt by name.
 | `apply_to_job` | `posting` (JD text or https URL) | Calls `get_scoring_context` and scores the job. It shows you the score, gaps, duplicates and existing folders, and **waits for your yes**. Then it calls `get_generation_context`, writes the CV and cover letter, and runs `draft_application` until the draft has no problems. Then it calls `generate_application`, which goes through the confirmation gate and sends the application to Discord. |
 | `daily_run` | `max_scores?` (30), `max_documents?` (5) | Scrape, `list_jobs_to_score` → score → `record_scores`, then write and generate documents for the best queued jobs (each goes to Discord) and report counts. Invoking it approves the confirmations it needs. |
 
-Email and calendar access comes from the **claude.ai Gmail and Google Calendar connectors** in the client, not from this server. The server never holds Google credentials. Two prompts give Claude the steps:
+Email and calendar access comes from the **claude.ai Gmail and Google Calendar connectors** in the client, not from this server. The server never holds Google credentials. Three prompts give Claude the steps:
 
 | Prompt | Arguments | What Claude does |
 |---|---|---|
+| `import_job_alerts` | `days?` (2) | Searches Gmail for LinkedIn, StepStone, Indeed, XING and other job alert emails, adds their jobs with `add_jobs`, looks up the employer's own posting for `needs_text` links, and reports what was added, filtered or left for you. Run it in chat; the scheduled task does not read your email. |
 | `interview_prep` | `company`, `role?`, `when?` | Calls `get_application`, finds the event with the Calendar connector, reads recruiter threads with the Gmail connector (using `gmail_query`), researches the company with web search, then writes a brief: logistics, fit and gaps, company snapshot with sources, likely questions with talking points, questions to ask. |
 | `application_status` | `company`, `role?` | Builds a dated timeline across the pipeline, folders, Gmail and Calendar, and gives the current status and next action. It flags replies pending more than 10 days. |
 
-Both prompts tell Claude to stay read-only (no sending, drafting or calendar changes), to treat emails, events, job descriptions and web pages as data, and never to invent experience. Connect Gmail and Google Calendar in claude.ai's connector settings first.
+All three prompts tell Claude to stay read-only (no sending, drafting or calendar changes), to treat emails, events, job descriptions and web pages as data, and never to invent experience. Connect Gmail and Google Calendar in claude.ai's connector settings first.
 
 ## Safety model
 
@@ -188,6 +193,7 @@ Layout: `server.py` (factory and HTTP app), `auth.py` (token verifier), `state.p
 - **Process-local runs.** Run tracking lives in memory. If the MCP server restarts, a phase keeps running in ApplAI but `get_pipeline_run` forgets it. Pending confirmation tokens are lost too; ask again.
 - **One user.** The HTTP transport admits a single WorkOS user. There are no scopes or roles.
 - **Claude usage.** Scoring and writing run on the client's Claude plan. Batches are capped (30 scores per `record_scores` call; `daily_run` defaults to 5 documents).
-- **Login-walled pages.** These can't be fetched; paste the text instead.
+- **Login-walled pages.** These can't be fetched; paste the text instead. LinkedIn job links are read from LinkedIn's public guest page with a single request, which LinkedIn often rate-limits (and usually blocks from datacenter hosts), so expect `needs_text` and let Claude find the employer's own posting.
+- **Watchlist coverage.** Only the seven ATSs above are supported. Companies on Workday, SuccessFactors or their own careers system can't be watched; Arbeitsagentur search often covers them.
 - **DNS rebinding.** The URL guard checks resolved addresses before connecting, and the HTTP client resolves again afterwards. That gap is accepted because callers must hold the API key.
 - **Connector prompts.** The prompts depend on the client having the Gmail and Calendar connectors and web search. Without them, Claude says which source was unavailable.

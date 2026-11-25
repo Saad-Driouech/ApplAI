@@ -22,7 +22,8 @@ Two ways to run it:
 
 ## Features
 
-- **Multi-source scraping** — Arbeitnow (Germany), EnglishJobs.de (English-speaking jobs in Germany), Remotive (global remote), RemoteOK (global remote), Adzuna (DE/AE/NL/CH, optional API key), with extensible scraper base class
+- **Multi-source scraping** — Bundesagentur für Arbeit (keyword search over all German postings, full descriptions), a **company watchlist** that reads the public job boards (Greenhouse, Lever, Ashby, SmartRecruiters, Personio, Recruitee, Workable) of companies you pick, Arbeitnow (Germany), EnglishJobs.de (English-speaking jobs in Germany), Remotive and RemoteOK (global remote), and Adzuna (DE/AE/NL/CH, optional API key), with an extensible scraper base class
+- **Jobs from anywhere else** — through the MCP server, Claude adds jobs you paste, finds on the web or receives in LinkedIn, StepStone, Indeed or XING job alert emails. LinkedIn links are read from LinkedIn's public job page when it allows it; ApplAI never logs in to LinkedIn.
 - **LLM-powered scoring** — Gemini 2.5 Flash (free tier) or Groq as Tier 1 scorer; configurable threshold (default 6.0/10)
 - **AI keyword pre-filter** — Jobs without AI/ML keywords in title or description are auto-skipped before LLM scoring, saving API quota
 - **Document generation** — Anthropic API tailors a LaTeX CV and a LaTeX cover letter, both compiled to PDF
@@ -154,6 +155,7 @@ Claude-authored flow (Claude scores and writes through the MCP server; ApplAI st
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `POST` | `/jobs/resolve` | Fetch or take a posting, sanitize it, report the pre-filters and duplicates (no LLM) |
+| `POST` | `/jobs/ingest` | Add up to 25 jobs Claude found as `new`; each comes back `inserted`, `duplicate`, `filtered` (resend with `keep`), `needs_text` (URL unreadable) or `rejected` |
 | `GET` | `/scoring/context` | Scoring rubric, profile, learned preferences, threshold and target countries |
 | `POST` | `/jobs/prefilter` | Expire stale jobs, then skip `new` jobs failing the location, title or keyword pre-filter |
 | `GET` | `/jobs/to-score` | `new` jobs with sanitized descriptions (first 3000 characters) |
@@ -162,6 +164,17 @@ Claude-authored flow (Claude scores and writes through the MCP server; ApplAI st
 | `POST` | `/drafts` | Render Claude's CV LaTeX and cover letter body into `.pending/<draft_id>/` and report page counts; the database is untouched |
 | `GET` | `/drafts/{draft_id}` | A draft's job, score, page counts and warnings |
 | `POST` | `/drafts/{draft_id}/commit` | Create or queue the job, register the draft as an application, and deliver only that one to Discord and Notion (`?deliver=false` to skip; a failed delivery leaves it `ready`) |
+
+Company watchlist (public ATS job boards that every scrape reads):
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/watchlist/detect` | Find a company's board from its careers URL (link or embedded board) or by guessing slugs from its name |
+| `POST` | `/watchlist` | Watch a board after checking it has readable jobs |
+| `GET` | `/watchlist` | Watched companies with the jobs found at the last read and the last error (`?include_inactive=true`) |
+| `DELETE` | `/watchlist/{id}` | Stop watching a board |
+
+To seed the watchlist from your application folders and `src/scrapers/watchlist_suggestions.txt`, run `docker compose exec applai-api python -m src.scrapers.seed_watchlist`. It writes a review file next to the database and changes nothing. Check the guessed boards (a guess can hit a different company with a similar name), set `"watch"` per entry, then run the command again with `--apply <file>`.
 
 All routes except `/health` and `/discord/interactions` require the `X-API-Key` header. A phase that is already running returns `409`. The `/jobs/*`, `/scoring/*`, `/generation/*` and `/drafts/*` routes back the MCP server and use typed request/response models (see `/docs`).
 
@@ -199,6 +212,11 @@ applai/
 │   ├── logger.py               # Structured logging + audit trail
 │   ├── scrapers/
 │   │   ├── base.py             # Abstract base with retry + dedup
+│   │   ├── arbeitsagentur.py   # Bundesagentur für Arbeit job search (public API)
+│   │   ├── ats.py              # Public ATS job-board adapters and board detection
+│   │   ├── watchlist.py        # Reads the boards of watched companies
+│   │   ├── seed_watchlist.py   # Seeds the watchlist (review file, then --apply)
+│   │   ├── single_url.py       # One posting from a URL (SSRF-checked; LinkedIn guest page)
 │   │   ├── arbeitnow.py        # Germany jobs (general feed, no search API)
 │   │   ├── englishjobs.py      # English-speaking jobs in Germany (HTML listing)
 │   │   ├── remotive.py         # Global remote jobs (free API)
@@ -254,7 +272,7 @@ applai/
 
 ## Current Progress
 
-- [x] Job scraping (Arbeitnow, EnglishJobs.de, Remotive, RemoteOK, Adzuna)
+- [x] Job scraping (Bundesagentur für Arbeit, company watchlist, Arbeitnow, EnglishJobs.de, Remotive, RemoteOK, Adzuna)
 - [x] LLM scoring (Gemini Flash, Groq)
 - [x] CV generation (LaTeX → PDF via Anthropic API)
 - [x] Cover letter generation (LaTeX → PDF via Anthropic API)
@@ -268,6 +286,8 @@ applai/
 - [x] Skipped jobs digest with rescue flow
 - [x] Ollama fallback for offline/free LLM scoring
 - [x] Additional scraper sources (RemoteOK, Adzuna)
+- [x] Bundesagentur für Arbeit search and the company watchlist (public ATS job boards)
+- [x] Jobs added by Claude: pasted, from web search and from job alert emails
 
 ## Cost
 

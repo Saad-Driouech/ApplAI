@@ -11,7 +11,8 @@ Every application still waits for my Approve or Reject in Discord.
 ## Steps
 
 1. **Scrape.** Call `run_pipeline_phase` with phase `scrape`, confirm it, then poll `get_pipeline_run` with the
-   `run_id` about every 30 seconds until it is no longer `running`.
+   `run_id` about every 30 seconds until it is no longer `running`. It takes a few minutes (Arbeitsagentur
+   details and the watched companies' job boards).
 2. **Score.** Call `list_jobs_to_score` with limit 30. Score every job from 0 to 10 with the rubric, profile and
    learned preferences it returns, and decide `is_job_posting`. Store all scores in one `record_scores` call with
    `scored_by` set to the model you are running on.
