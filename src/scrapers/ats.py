@@ -33,8 +33,11 @@ ATS_NAMES = ("greenhouse", "lever", "ashby", "smartrecruiters", "personio", "rec
 # Workable answers bulk lookups with HTTP 429, so its boards are only found from links, never guessed
 GUESSABLE_ATS = tuple(a for a in ATS_NAMES if a != "workable")
 
-# Slugs end up in URLs (and as subdomains for Personio and Recruitee), so no dots, slashes or '@'
+# Slugs end up in URLs: never slashes, '@' or '..'. Personio and Recruitee use them as a subdomain,
+# so no dots there either; the others only put them in the path ('mistral.ai' on Ashby)
 _SLUG = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$")
+_PATH_SLUG = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9_-]|\.(?!\.)){0,98}[A-Za-z0-9_-]$|^[A-Za-z0-9]$")
+SUBDOMAIN_ATS = ("personio", "recruitee")
 _SMARTRECRUITERS_MAX_PAGES = 10
 
 
@@ -42,10 +45,14 @@ class AtsError(ValueError):
     """Unknown ATS, invalid slug, or a board that cannot be read."""
 
 
+def valid_slug(ats: str, slug: str) -> bool:
+    return bool((_SLUG if ats in SUBDOMAIN_ATS else _PATH_SLUG).fullmatch(slug or ""))
+
+
 def check_slug(ats: str, slug: str) -> None:
     if ats not in ATS_NAMES:
         raise AtsError(f"Unknown ATS '{ats}' (supported: {', '.join(ATS_NAMES)})")
-    if not _SLUG.fullmatch(slug or ""):
+    if not valid_slug(ats, slug):
         raise AtsError(f"Invalid board slug '{slug}'")
 
 
@@ -264,11 +271,11 @@ def board_client(timeout: float = 10.0, retries: int = 2) -> Iterator[Get]:
 _BOARD_PATTERNS = (
     ("greenhouse", r"(?:boards|job-boards)(?:\.eu)?\.greenhouse\.io/(?:embed/job_board(?:/js)?\?for=)?([A-Za-z0-9_-]+)"),
     ("greenhouse", r"boards-api(?:\.eu)?\.greenhouse\.io/v1/boards/([A-Za-z0-9_-]+)"),
-    ("lever", r"jobs(?:\.eu)?\.lever\.co/([A-Za-z0-9_-]+)"),
-    ("lever", r"api(?:\.eu)?\.lever\.co/v0/postings/([A-Za-z0-9_-]+)"),
-    ("ashby", r"jobs\.ashbyhq\.com/([A-Za-z0-9_-]+)"),
-    ("ashby", r"api\.ashbyhq\.com/posting-api/job-board/([A-Za-z0-9_-]+)"),
-    ("smartrecruiters", r"(?:jobs|careers)\.smartrecruiters\.com/([A-Za-z0-9_-]+)"),
+    ("lever", r"jobs(?:\.eu)?\.lever\.co/([A-Za-z0-9._-]+)"),
+    ("lever", r"api(?:\.eu)?\.lever\.co/v0/postings/([A-Za-z0-9._-]+)"),
+    ("ashby", r"jobs\.ashbyhq\.com/([A-Za-z0-9._-]+)"),
+    ("ashby", r"api\.ashbyhq\.com/posting-api/job-board/([A-Za-z0-9._-]+)"),
+    ("smartrecruiters", r"(?:jobs|careers)\.smartrecruiters\.com/([A-Za-z0-9._-]+)"),
     ("personio", r"//([A-Za-z0-9-]+)\.jobs\.personio\.(?:de|com)"),
     ("recruitee", r"//([A-Za-z0-9-]+)\.recruitee\.com"),
     ("workable", r"apply\.workable\.com/([A-Za-z0-9_-]+)"),
@@ -292,8 +299,8 @@ def boards_in(text: str) -> list[tuple[str, str]]:
     found: dict[tuple[str, str], int] = {}
     for ats, pattern in _BOARD_PATTERNS:
         for match in re.finditer(pattern, text or "", re.IGNORECASE):
-            slug = match.group(1)
-            if slug.lower() not in _NOT_SLUGS and _SLUG.fullmatch(slug):
+            slug = match.group(1).rstrip(".")   # a link at the end of a sentence
+            if slug.lower() not in _NOT_SLUGS and valid_slug(ats, slug):
                 found.setdefault((ats, slug), match.start())
     return sorted(found, key=found.get)  # type: ignore[arg-type]
 

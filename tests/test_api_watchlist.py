@@ -104,3 +104,17 @@ def test_watch_rejects_unreadable_or_empty_boards(client, body, detail):
 ])
 def test_watch_validates_ats_and_slug(client, body):
     assert client.post("/watchlist", json=body, headers=KEY).status_code == 422
+
+
+def test_dots_pass_the_api_but_not_into_a_subdomain(client, monkeypatch):
+    monkeypatch.setitem(BOARDS, ("ashby", "mistral.ai"), [{"title": "AI Scientist"}])
+    ok = client.post("/watchlist", json={"name": "Mistral AI", "ats": "ashby", "slug": "mistral.ai"}, headers=KEY)
+    assert ok.status_code == 200 and ok.json()["company"]["slug"] == "mistral.ai"
+
+    def checked_fetch(get, ats_name, slug, details=True):
+        ats.check_slug(ats_name, slug)
+        return [{"title": "x"}]
+
+    monkeypatch.setattr(ats, "fetch_board", checked_fetch)
+    bad = client.post("/watchlist", json={"name": "X", "ats": "personio", "slug": "evil.com"}, headers=KEY)
+    assert bad.status_code == 422 and "Invalid board slug" in bad.json()["detail"]

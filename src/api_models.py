@@ -264,7 +264,8 @@ class DraftResponse(BaseModel):
 # ── Company watchlist: public ATS job boards polled by the scrape phase ──
 
 ATS_PATTERN = r"^(?:greenhouse|lever|ashby|smartrecruiters|personio|recruitee|workable)$"
-SLUG_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$"
+# Dots are allowed here; src/scrapers/ats.py rejects them for ATSs that use the slug as a subdomain
+SLUG_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$"
 HTTPS_URL = r"^https://"
 
 

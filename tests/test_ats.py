@@ -126,7 +126,16 @@ class TestAdapters:
         [wk] = fetch_board(get, "workable", "acme")
         assert wk["country"] == "ES" and wk["city"].startswith("Remote")
 
-    @pytest.mark.parametrize("ats_name,slug", [("greenhouse", "evil.com/#"), ("personio", "a.b"), ("nope", "acme"), ("lever", "")])
+    def test_dotted_slugs_work_where_the_slug_is_only_a_path(self):
+        get = fake_get({"https://api.ashbyhq.com/posting-api/job-board/mistral.ai": {"jobs": [
+            {"id": "1", "title": "AI Scientist", "jobUrl": "https://jobs.ashbyhq.com/mistral.ai/1", "location": "Paris"}]}})
+        [job] = fetch_board(get, "ashby", "mistral.ai")
+        assert job["source_url"] == "https://jobs.ashbyhq.com/mistral.ai/1"
+
+    @pytest.mark.parametrize("ats_name,slug", [
+        ("greenhouse", "evil.com/#"), ("personio", "a.b"), ("recruitee", "evil.com"), ("ashby", "a..b"),
+        ("ashby", ".hidden"), ("lever", "acme."), ("nope", "acme"), ("lever", ""),
+    ])
     def test_rejects_unknown_ats_and_unsafe_slugs(self, ats_name, slug):
         with pytest.raises(AtsError):
             fetch_board(fake_get({}), ats_name, slug)
@@ -138,6 +147,8 @@ class TestDetection:
         ('<script src="https://boards.greenhouse.io/embed/job_board/js?for=databricks">', [("greenhouse", "databricks")]),
         ("https://jobs.eu.lever.co/acme/abc", [("lever", "acme")]),
         ("https://jobs.ashbyhq.com/deepl/embed?version=2", [("ashby", "deepl")]),
+        ("https://jobs.ashbyhq.com/mistral.ai/d040f4c6-ed98?locationId=9931", [("ashby", "mistral.ai")]),
+        ("Apply at https://jobs.ashbyhq.com/mistral.ai.", [("ashby", "mistral.ai")]),
         ('<a href="https://dida.jobs.personio.de/job/1">', [("personio", "dida")]),
         ("https://wetteronline.recruitee.com/o/x", [("recruitee", "wetteronline")]),
         ("https://apply.workable.com/acme/j/ABC", [("workable", "acme")]),

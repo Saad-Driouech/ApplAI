@@ -17,7 +17,7 @@ WATCH = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent
 UNWATCH = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=False)
 
 Ats = Literal["greenhouse", "lever", "ashby", "smartrecruiters", "personio", "recruitee", "workable"]
-Slug = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$", description="Board slug from a candidate")]
+Slug = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$", description="Board slug from a candidate")]
 CareersUrl = Annotated[str, Field(pattern=r"^https://", max_length=2000,
                                   description="The company's careers page, or the link of one of its postings")]
 
