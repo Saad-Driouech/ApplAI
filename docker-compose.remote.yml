@@ -84,9 +84,10 @@ services:
     ports:
       - "${TAILSCALE_IP:?set TAILSCALE_IP in .env}:22000:22000/tcp"
       - "${TAILSCALE_IP}:22000:22000/udp"
-      - "127.0.0.1:8384:8384"           # GUI: ssh -L 8384:127.0.0.1:8384 over the tailnet
+      - "127.0.0.1:8384:8384"           # GUI: ssh -N -L 18384:127.0.0.1:8384 over the tailnet
     volumes:
-      - syncthing_config:/var/syncthing/config
+      # The image hands only its home (/var/syncthing) to PUID; the config lives inside it
+      - syncthing_home:/var/syncthing
       - ${APPLAI_WORKING_DIR}:/var/syncthing/job_applications
       - ${APPLAI_BACKUP_DIR:-/srv/applai/backups}:/var/syncthing/backups
     security_opt:
@@ -95,4 +96,4 @@ services:
 volumes:
   caddy_data:
   caddy_config:
-  syncthing_config:
+  syncthing_home:
